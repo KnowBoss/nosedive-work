@@ -1,0 +1,15 @@
+{
+	"name": "nosedive-work",
+	"version": "0.0.0",
+	"private": true,
+	"description": "nosedive's work loop as a cape: feats and dives, and jump, pack, bail, land and merge.",
+	"license": "UNLICENSED",
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"typescript": "^5.9.0"
+	}
+}
