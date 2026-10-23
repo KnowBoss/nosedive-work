@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { i01a13354845c7253a55b60bba87285d8 as findKbDoc } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import type { Doc, Ship } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
+
+const LOCAL = /^(?:[^:]*\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.md)?$/;
 
 /** One repo a feat or dive works in: its work goes to `branch`, and a scope with none is read-only. */
 export type ScopeEntry = { repoId: string; branch?: string; pin?: string };
@@ -64,9 +66,8 @@ export function i01a15bb27be9786f91885a2f0a0fa08e(ship: Ship, ctx: { out(text: s
 	if (!diveId) throw new Error("no dive is on deck: `nosedive jump <feat or dive>` picks one up");
 	const doc = findKbDoc(ship.kbDir, diveId);
 	if (doc?.fm.kind !== "dive") throw new Error(`${diveId} is no dive in the ship's kb`);
-	const featLink = (Array.isArray(doc.fm.links) ? doc.fm.links : []).flatMap((link) => Object.entries(link as object)).find(([, value]) => (value as { rel?: unknown })?.rel === "parent.feat");
-	const featId = featLink?.[0].replace(/^kb\//, "").replace(/\.md$/, "");
-	const feat = featId ? findKbDoc(ship.kbDir, featId) : undefined;
+	const featId = (doc.fm.meta as { feat?: unknown } | undefined)?.feat;
+	const feat = typeof featId === "string" ? findKbDoc(ship.kbDir, featId) : undefined;
 	const scopes = readScopes(doc).map((entry): Scope => {
 		const repo = repoDoc(ship, entry.repoId);
 		const { dir, trunk } = hydrateRepo(ship, repo, quiet(ctx));
@@ -85,6 +86,39 @@ export function readOnlyRefusals(dive: Dive): string[] {
 			if (runGit(scope.dir, "status", "--porcelain").text) return [`${scope.name} is read-only, yet has uncommitted changes`];
 			return [];
 		});
+}
+
+/** The ids a doc links within its own repo, with each link's rel; a link naming another repo (<repo>:<id>) is left out. */
+export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
+	return (Array.isArray(doc.fm.links) ? doc.fm.links : []).flatMap((link) =>
+		Object.entries((link ?? {}) as Record<string, { rel?: unknown } | null>).flatMap(([key, value]) => {
+			const id = LOCAL.exec(key)?.[1];
+			return id ? [{ id, rel: value?.rel }] : [];
+		}),
+	);
+}
+
+/** Whether the ship's root reaches a doc through links whose rel ends .feat, which is what makes it a feat. */
+export function reachedAsFeat(ship: Ship, id: string): boolean {
+	const seen = new Set<string>();
+	const queue = ship.root ? [ship.root] : [];
+	while (queue.length > 0) {
+		const at = queue.shift()!;
+		if (seen.has(at)) continue;
+		seen.add(at);
+		const doc = findKbDoc(ship.kbDir, at);
+		for (const link of doc ? linkedIds(doc) : []) {
+			if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
+			if (link.id === id) return true;
+			queue.push(link.id);
+		}
+	}
+	return false;
+}
+
+/** How a doc in the ship's kb is linked: its path from the ship's root, bridge/<id>.md in a seeded ship. */
+export function keyOf(ship: Ship, doc: Doc): string {
+	return relative(ship.dir, doc.path).replace(/\\/g, "/");
 }
 
 /** Hydration says only what it changed: a checkout already there is no news. */

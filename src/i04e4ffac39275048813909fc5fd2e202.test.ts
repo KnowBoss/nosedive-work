@@ -21,7 +21,7 @@ test("pushes the work to its feat's branch, deletes the dive's ref, and ends the
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), head);
 	assert.equal(f.remoteRef(`refs/nosedive/dives/${id}`), "");
 	assert.equal(f.remoteRef("refs/heads/main"), git(f.remote, "rev-parse", "main"), "trunk is untouched");
-	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}outcome: landed\\n[^]*\\n## Landed \\S+\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n$`));
+	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n {2}outcome: landed\\n[^]*\\n## Landed \\S+\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n$`));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), head, "the checkout stays at what it pushed");
 
 	await jump({ ref: f.featId }, f.ctx);

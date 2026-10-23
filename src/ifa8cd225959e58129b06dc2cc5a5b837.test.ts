@@ -20,7 +20,7 @@ test("records why and what the dive held, deletes its ref, and ends it", async (
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), pin);
 	assert.equal(f.remoteRef(`refs/nosedive/dives/${id}`), "", "the ref is gone");
 	const doc = f.doc(id);
-	assert.match(doc, /\nmeta:\n {2}outcome: bailed\n/);
+	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}outcome: bailed\n/);
 	assert.match(doc, new RegExp(`\\n## Bailed \\S+\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md\\n$`));
 	assert.throws(() => f.onDeck());
 	await assert.rejects(jump({ ref: id }, f.ctx), /is over: it bailed/);

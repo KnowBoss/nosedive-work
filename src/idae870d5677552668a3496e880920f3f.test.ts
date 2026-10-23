@@ -23,7 +23,7 @@ test("keeps the work on the dive's ref, uncommitted changes and all, and the nex
 	assert.equal(git(f.remote, "for-each-ref", "refs/heads"), git(f.remote, "for-each-ref", "refs/heads/main"), "no branch was made");
 	assert.throws(() => f.onDeck(), "nothing is on deck");
 	const doc = f.doc(id);
-	assert.match(doc, /\nmeta:\n {2}packer: diver@example\.com\n/);
+	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}packer: diver@example\.com\n/);
 	assert.match(doc, /\n## Packed \S+\n\ndiver@example\.com put it down\.\n\n- data: 2 commits past \w{7}, kept at \w{7}\n$/);
 
 	await jump({ ref: id }, f.ctx);

@@ -5,7 +5,7 @@ import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a13354845c7253a55b60bba87285d8 as findKbDoc } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
-import { quiet, readScopes, repoDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { linkedIds, quiet, reachedAsFeat, readScopes, repoDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -15,11 +15,10 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 	const ship = findBridge(ctx.cwd);
 	if (!ship?.workspace) throw new Error("merge works in a ship, and this is not one");
 	const feat = findKbDoc(ship.kbDir, String(args.feat));
-	if (feat?.fm.kind !== "feat") throw new Error(`${String(args.feat)} is no feat in the ship's kb`);
-	const open = (Array.isArray(feat.fm.links) ? feat.fm.links : [])
-		.flatMap((link) => Object.entries(link as Record<string, { rel?: unknown }>))
-		.filter(([, value]) => value?.rel === "child.feat")
-		.map(([path]) => findKbDoc(ship.kbDir, path.replace(/^kb\//, "").replace(/\.md$/, "")))
+	if (!feat || !reachedAsFeat(ship, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the ship's kb`);
+	const open = linkedIds(feat)
+		.filter(({ rel }) => rel === "dives.feat")
+		.map(({ id }) => findKbDoc(ship.kbDir, id))
 		.filter((doc) => doc?.fm.kind === "dive" && !(doc.fm.meta as { outcome?: unknown } | undefined)?.outcome);
 	if (open.length > 0) throw new Error(`${String(feat.fm.name)} has open dives, so nothing was merged: ${open.map((doc) => String(doc!.fm.name)).join(", ")}`);
 

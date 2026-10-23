@@ -7,7 +7,7 @@ import { i4b0709b1f9bf587aa8452f900544321e as jump } from "./i4b0709b1f9bf587aa8
 import { idae870d5677552668a3496e880920f3f as pack } from "./idae870d5677552668a3496e880920f3f.ts";
 import { fixture, git } from "../test/harness.ts";
 
-test("a feat gets a dive, pinned at trunk while its work branch is missing, linked both ways, held and on deck", async () => {
+test("a feat the root reaches gets a dive, pinned at trunk while its work branch is missing, naming the feat and linked from it as dives.feat, held and on deck", async () => {
 	const f = fixture("jump-feat");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -15,10 +15,10 @@ test("a feat gets a dive, pinned at trunk while its work branch is missing, link
 	const trunk = git(f.remote, "rev-parse", "main");
 	assert.match(dive, new RegExp(`^---\\nkind: dive\\nid: ${id}\\nname: ideas\\.${id.slice(-6)}\\n`));
 	assert.match(dive, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n {6}pin: ${trunk}\\n`));
-	assert.match(dive, /\nmeta:\n {2}diver: diver@example\.com\n/);
-	assert.match(dive, new RegExp(`links:\\n {2}- kb/${f.featId}\\.md:\\n {6}rel: parent\\.feat\\n`));
+	assert.match(dive, new RegExp(`\\nmeta:\\n {2}feat: ${f.featId}\\n {2}diver: diver@example\\.com\\n`));
+	assert.doesNotMatch(dive, /\nlinks:/, "a dive links nothing back");
 	assert.match(dive, /\n## Jumped \S+\n\ndiver@example\.com picked it up\.\n\n- data: workspace\/data on \w+, pinned at \w{7}, working work\/ideas\n$/);
-	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: child\\.feat\\n`));
+	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: dives\\.feat\\n`));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), trunk);
 	assert.equal(git(f.ship, "log", "-1", "--format=%s"), `jump(ideas.${id.slice(-6)}): diver@example.com picked it up`);
 	assert.equal(git(f.ship, "status", "--porcelain"), "", "the feat's link rides the same commit");
@@ -31,7 +31,7 @@ test("refuses a second dive while one is on deck, a doc that is neither feat nor
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), new RegExp(`dive ${id} is on deck: pack, bail or land it first`));
-	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is a repo: jump takes a feat or a dive/);
+	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from the ship.s root through a .feat link; link it from a feat first/);
 	git(f.ship, "config", "user.email", "other@example.com");
 	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com`));
 	git(f.ship, "config", "user.email", "diver@example.com");
