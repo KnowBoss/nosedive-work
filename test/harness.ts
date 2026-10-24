@@ -25,7 +25,11 @@ function identify(dir: string): void {
 }
 
 /** A ship with a remote, registering one repo, `data`, that has a remote, and a feat its root links scoping it, writable unless `readOnly`. */
-export function fixture(label: string, options: { readOnly?: boolean } = {}) {
+/**
+ * A ship with one feat on repo `data`. By default an older ship, its root in kb named by its config;
+ * `decks` makes it a ship by its kind file, the feat on a second deck, ./docs, and the repo in its bridge.
+ */
+export function fixture(label: string, options: { readOnly?: boolean; decks?: boolean } = {}) {
 	const dir = tempDir(label);
 	const remote = join(dir, "data.git");
 	git(dir, "init", "-q", "--bare", "-b", "main", remote);
@@ -45,12 +49,24 @@ export function fixture(label: string, options: { readOnly?: boolean } = {}) {
 	const [shipId, repoId, featId] = [mintUuid(), mintUuid(), mintUuid()];
 	mkdirSync(join(ship, ".nosedive"), { recursive: true });
 	mkdirSync(join(ship, "kb"));
-	writeFileSync(join(ship, ".nosedive", "config.yaml"), `kb: ./kb\nship: ${shipId}\n`);
+	const deck = options.decks ? "docs" : "kb";
+	const repos = options.decks ? join(".nosedive", "repos") : "kb";
+	mkdirSync(join(ship, deck), { recursive: true });
+	mkdirSync(join(ship, repos), { recursive: true });
 	writeFileSync(join(ship, ".nosedive", ".gitignore"), "cache/\ncapes/\nlocal/\n");
-	writeFileSync(join(ship, "kb", `${shipId}.md`), `---\nkind: ship\nid: ${shipId}\nname: ship\ngist: "A ship"\nmeta:\n  workspace: ./workspace\nlinks:\n  - kb/${featId}.md:\n      rel: work.feat\n---\n\n# ship\n`);
-	writeFileSync(join(ship, "kb", `${repoId}.md`), `---\nkind: repo\nid: ${repoId}\nname: data\ngist: "Data"\nmeta:\n  trunk: main\n  remotes:\n    origin: ${JSON.stringify(remote)}\n---\n\n# data\n`);
+	const feats = `links:\n  - ${deck}/${featId}.md:\n      rel: work.feat\n`;
+	if (options.decks) {
+		const [first, second] = [mintUuid(), mintUuid()];
+		writeFileSync(join(ship, ".nosedive", "ship.md"), `---\nkind: ship\nid: ${shipId}\nname: ship\ngist: "A ship"\nmeta:\n  workspace: ./workspace\n  decks:\n    ./kb: ${first}\n    ./docs: ${second}\n---\n\n# ship\n`);
+		writeFileSync(join(ship, "kb", `${first}.md`), `---\nkind: deck\nid: ${first}\nname: kb\ngist: "The first deck"\n---\n\n# kb\n`);
+		writeFileSync(join(ship, "docs", `${second}.md`), `---\nkind: deck\nid: ${second}\nname: docs\ngist: "The second deck"\n${feats}---\n\n# docs\n`);
+	} else {
+		writeFileSync(join(ship, ".nosedive", "config.yaml"), `kb: ./kb\nship: ${shipId}\n`);
+		writeFileSync(join(ship, "kb", `${shipId}.md`), `---\nkind: ship\nid: ${shipId}\nname: ship\ngist: "A ship"\nmeta:\n  workspace: ./workspace\n${feats}---\n\n# ship\n`);
+	}
+	writeFileSync(join(ship, repos, `${repoId}.md`), `---\nkind: repo\nid: ${repoId}\nname: data\ngist: "Data"\nmeta:\n  trunk: main\n  remotes:\n    origin: ${JSON.stringify(remote)}\n---\n\n# data\n`);
 	const scope = options.readOnly ? `  - ${repoId}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
-	writeFileSync(join(ship, "kb", `${featId}.md`), `---\nkind: memo\nid: ${featId}\nname: ideas\ngist: "Ideas"\nscopes:\n${scope}---\n\n# Ideas\n`);
+	writeFileSync(join(ship, deck, `${featId}.md`), `---\nkind: memo\nid: ${featId}\nname: ideas\ngist: "Ideas"\nscopes:\n${scope}---\n\n# Ideas\n`);
 	mkdirSync(join(ship, "workspace"));
 	writeFileSync(join(ship, "workspace", ".gitignore"), "*\n");
 	git(ship, "add", "-A");
@@ -72,7 +88,7 @@ export function fixture(label: string, options: { readOnly?: boolean } = {}) {
 		err,
 		/** The dive on deck's id. */
 		onDeck: () => readFileSync(join(ship, ".nosedive", "local", "dive"), "utf8").trim(),
-		doc: (id: string) => readFileSync(join(ship, "kb", `${id}.md`), "utf8"),
+		doc: (id: string) => readFileSync(join(ship, deck, `${id}.md`), "utf8"),
 		/** Writes and commits a file in the data checkout. */
 		commit(file: string, text: string): string {
 			writeFileSync(join(checkout, file), text);

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { i01a13354845c7253a55b60bba87285d8 as findKbDoc } from "nosedive-core";
+import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import type { Doc, Ship } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -54,9 +54,15 @@ export function readScopes(doc: Doc): ScopeEntry[] {
 	});
 }
 
+/** A doc of the ship itself, in its bridge or any of its decks, never one of its workspace's repos. */
+export function shipDoc(ship: Ship, id: string): Doc | undefined {
+	const doc = locateKbDoc(ship, id);
+	return doc?.repoDir === ship.dir ? doc : undefined;
+}
+
 /** The scope's repo doc, which the ship must register. */
 export function repoDoc(ship: Ship, repoId: string): Doc {
-	const repo = findKbDoc(ship.kbDir, repoId);
+	const repo = shipDoc(ship, repoId);
 	if (repo?.fm.kind !== "repo") throw new Error(`${repoId} is no repo registered in the ship`);
 	return repo;
 }
@@ -64,10 +70,10 @@ export function repoDoc(ship: Ship, repoId: string): Doc {
 export function i01a15bb27be9786f91885a2f0a0fa08e(ship: Ship, ctx: { out(text: string): void; err(text: string): void }, id?: string): Dive {
 	const diveId = id ?? onDeckId(ship);
 	if (!diveId) throw new Error("no dive is on deck: `nosedive jump <feat or dive>` picks one up");
-	const doc = findKbDoc(ship.kbDir, diveId);
-	if (doc?.fm.kind !== "dive") throw new Error(`${diveId} is no dive in the ship's kb`);
+	const doc = shipDoc(ship, diveId);
+	if (doc?.fm.kind !== "dive") throw new Error(`${diveId} is no dive in the ship`);
 	const featId = (doc.fm.meta as { feat?: unknown } | undefined)?.feat;
-	const feat = typeof featId === "string" ? findKbDoc(ship.kbDir, featId) : undefined;
+	const feat = typeof featId === "string" ? shipDoc(ship, featId) : undefined;
 	const scopes = readScopes(doc).map((entry): Scope => {
 		const repo = repoDoc(ship, entry.repoId);
 		const { dir, trunk } = hydrateRepo(ship, repo, quiet(ctx));
@@ -98,22 +104,24 @@ export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
 	);
 }
 
-/** Whether the ship's root reaches a doc through links whose rel ends .feat, which is what makes it a feat. */
-export function reachedAsFeat(ship: Ship, id: string): boolean {
-	const seen = new Set<string>();
-	const queue = ship.root ? [ship.root] : [];
-	while (queue.length > 0) {
-		const at = queue.shift()!;
-		if (seen.has(at)) continue;
-		seen.add(at);
-		const doc = findKbDoc(ship.kbDir, at);
-		for (const link of doc ? linkedIds(doc) : []) {
-			if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
-			if (link.id === id) return true;
-			queue.push(link.id);
+/** The deck whose root reaches a doc through links whose rel ends .feat, which is what makes it a feat. */
+export function featDeck(ship: Ship, id: string): string | undefined {
+	for (const deck of ship.decks) {
+		const seen = new Set<string>();
+		const queue = deck.root ? [deck.root] : [];
+		while (queue.length > 0) {
+			const at = queue.shift()!;
+			if (seen.has(at)) continue;
+			seen.add(at);
+			const doc = shipDoc(ship, at);
+			for (const link of doc ? linkedIds(doc) : []) {
+				if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
+				if (link.id === id) return deck.dir;
+				queue.push(link.id);
+			}
 		}
 	}
-	return false;
+	return undefined;
 }
 
 /** How a doc in the ship's kb is linked: its path from the ship's root, bridge/<id>.md in a seeded ship. */
