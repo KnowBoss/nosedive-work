@@ -31,7 +31,7 @@ test("refuses a second dive while one is on deck, a doc that is neither feat nor
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), new RegExp(`dive ${id} is on deck: pack, bail or land it first`));
-	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a deck root of the ship through a .feat link; link it from a feat first/);
+	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a root of the ship through a .feat link; link it from a feat first/);
 	git(f.ship, "config", "user.email", "other@example.com");
 	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com`));
 	git(f.ship, "config", "user.email", "diver@example.com");
@@ -66,8 +66,8 @@ test("picks packed work up on its branch's new tip, moving the pin, and refuses 
 	await assert.rejects(jump({ ref: id }, f.ctx), /jump would lose work, so nothing moved:\n {2}workspace\/data is on \w+, which no ref holds/);
 });
 
-test("a feat on a ship's second deck gets its dive in that deck, its repo registered in the bridge, and packs and jumps again", async () => {
-	const f = fixture("jump-decks", { decks: true });
+test("a feat under a ship's second root gets its dive in that root's directory, its repo registered in .nosedive/repos, and packs and jumps again", async () => {
+	const f = fixture("jump-roots", { roots: true });
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	assert.match(f.doc(id), /^---\nkind: dive\n/, "minted beside its feat in ./docs");

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
-import { featDeck, linkedIds, quiet, readScopes, repoDoc, shipDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { featRoot, linkedIds, quiet, readScopes, repoDoc, shipDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -14,7 +14,7 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 	const ship = findBridge(ctx.cwd);
 	if (!ship?.workspace) throw new Error("merge works in a ship, and this is not one");
 	const feat = shipDoc(ship, String(args.feat));
-	if (!feat || !featDeck(ship, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the ship`);
+	if (!feat || !featRoot(ship, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the ship`);
 	const open = linkedIds(feat)
 		.filter(({ rel }) => rel === "dives.feat")
 		.map(({ id }) => shipDoc(ship, id))

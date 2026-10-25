@@ -6,7 +6,7 @@ import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deckFile, diverOf, featDeck, keyOf, onDeckId, quiet, readScopes, refOf, repoDoc, shipDoc, wip, type Scope } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deckFile, diverOf, featRoot, keyOf, onDeckId, quiet, readScopes, refOf, repoDoc, shipDoc, wip, type Scope } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Ship } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -21,10 +21,10 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 	const also: string[] = [];
 	let diveId = ref;
 	if (target.fm.kind !== "dive") {
-		const deck = featDeck(ship, ref);
-		if (!deck) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a deck root of the ship through a .feat link; link it from a feat first`);
+		const at = featRoot(ship, ref);
+		if (!at) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a root of the ship through a .feat link; link it from a feat first`);
 		if (onDeck) throw new Error(`dive ${onDeck} is on deck: pack, bail or land it first`);
-		diveId = mintDive(ship, deck, target, ctx);
+		diveId = mintDive(ship, at, target, ctx);
 		also.push(target.path);
 	}
 	if (onDeck && onDeck !== diveId) throw new Error(`dive ${onDeck} is on deck: pack, bail or land it first`);
@@ -87,7 +87,7 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 }
 
 /** Mints a dive on a feat, pinned where each scope's branch stands, naming its feat and linked from it; returns its id. */
-function mintDive(ship: Ship, deck: string, feat: Doc, ctx: Ctx): string {
+function mintDive(ship: Ship, dir: string, feat: Doc, ctx: Ctx): string {
 	const id = mintUuid();
 	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
 	const scopes = readScopes(feat).map((entry) => {
@@ -96,7 +96,7 @@ function mintDive(ship: Ship, deck: string, feat: Doc, ctx: Ctx): string {
 		const pin = tipOf({ dir, trunk, branch: entry.branch });
 		return { [entry.repoId]: entry.branch ? { "work-branch": entry.branch, pin } : { pin } };
 	});
-	const minted = mintKbDoc(deck, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
+	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
 	const doc = shipDoc(ship, minted.id)!;
 	doc.yaml.set("scopes", scopes);
 	writeKbDoc(doc.path, doc.yaml, doc.body);

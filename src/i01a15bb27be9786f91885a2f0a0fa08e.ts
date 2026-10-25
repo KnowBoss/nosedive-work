@@ -104,11 +104,15 @@ export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
 	);
 }
 
-/** The deck whose root reaches a doc through links whose rel ends .feat, which is what makes it a feat. */
-export function featDeck(ship: Ship, id: string): string | undefined {
-	for (const deck of ship.decks) {
+/**
+ * The directory of the root that reaches a doc through links whose rel ends .feat, which is what makes it a feat;
+ * a cape root's feats are its actions, not work.
+ */
+export function featRoot(ship: Ship, id: string): string | undefined {
+	for (const root of ship.roots) {
+		if (shipDoc(ship, root.id)?.fm.kind === "cape") continue;
 		const seen = new Set<string>();
-		const queue = deck.root ? [deck.root] : [];
+		const queue = [root.id];
 		while (queue.length > 0) {
 			const at = queue.shift()!;
 			if (seen.has(at)) continue;
@@ -116,7 +120,7 @@ export function featDeck(ship: Ship, id: string): string | undefined {
 			const doc = shipDoc(ship, at);
 			for (const link of doc ? linkedIds(doc) : []) {
 				if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
-				if (link.id === id) return deck.dir;
+				if (link.id === id) return root.dir;
 				queue.push(link.id);
 			}
 		}
