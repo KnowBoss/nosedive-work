@@ -1,2 +1,3 @@
-kb: ./kb
-cape: 01a15bb1-da9e-7d2d-aa82-5ee97257adc6
+id: 01a15bb1-da9e-7d2d-aa82-5ee97257adc6
+roots:
+  - kb/01a15bb1-da9e-7d2d-aa82-5ee97257adc6.md
