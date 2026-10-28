@@ -6,30 +6,30 @@ import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deckFile, diverOf, featRoot, keyOf, onDeckId, quiet, readScopes, refOf, repoDoc, shipDoc, wip, type Scope } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
-import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Ship } from "./i01a15bb27d7c72258e54d02070189892.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deckFile, diverOf, featRoot, keyOf, onDeckId, quiet, readScopes, refOf, repoDoc, heroDoc, wip, type Scope } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): Promise<void> {
-	const ship = findBridge(ctx.cwd);
-	if (!ship?.workspace) throw new Error("jump works in a ship, and this is not one: `nosedive seed` makes one");
+	const hero = findBridge(ctx.cwd);
+	if (!hero?.workspace) throw new Error("jump works in a hero repo, and this is not one: `nosedive seed` makes one");
 	const ref = String(args.ref);
-	const target = shipDoc(ship, ref);
-	if (!target) throw new Error(`no doc ${ref} in the ship`);
-	const onDeck = onDeckId(ship);
-	const me = diverOf(ship);
+	const target = heroDoc(hero, ref);
+	if (!target) throw new Error(`no doc ${ref} in the hero`);
+	const onDeck = onDeckId(hero);
+	const me = diverOf(hero);
 	const also: string[] = [];
 	let diveId = ref;
 	if (target.fm.kind !== "dive") {
-		const at = featRoot(ship, ref);
-		if (!at) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a root of the ship through a .feat link; link it from a feat first`);
+		const at = featRoot(hero, ref);
+		if (!at) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first`);
 		if (onDeck) throw new Error(`dive ${onDeck} is on deck: pack, bail or land it first`);
-		diveId = mintDive(ship, at, target, ctx);
+		diveId = mintDive(hero, at, target, ctx);
 		also.push(target.path);
 	}
 	if (onDeck && onDeck !== diveId) throw new Error(`dive ${onDeck} is on deck: pack, bail or land it first`);
 
-	const dive = diveOnDeck(ship, ctx, diveId);
+	const dive = diveOnDeck(hero, ctx, diveId);
 	const meta = (dive.doc.fm.meta ?? {}) as { diver?: unknown; outcome?: unknown };
 	if (meta.outcome) throw new Error(`dive ${String(dive.doc.fm.name)} is over: it ${String(meta.outcome)}`);
 	if (typeof meta.diver === "string" && meta.diver !== me) throw new Error(`dive ${String(dive.doc.fm.name)} is held by ${meta.diver}`);
@@ -43,7 +43,7 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 			runGit(scope.dir, "fetch", "-q", "origin");
 			const sha = fetchWork(scope.dir, diveId);
 			if (sha) work.set(scope, sha);
-			const shown = relative(ship.dir, scope.dir).replace(/\\/g, "/");
+			const shown = relative(hero.dir, scope.dir).replace(/\\/g, "/");
 			if (runGit(scope.dir, "status", "--porcelain").text) refused.push(`${shown} has uncommitted changes`);
 			else if (!held(scope.dir, scope.pin)) refused.push(`${shown} is on ${runGit(scope.dir, "rev-parse", "--short", "HEAD").text}, which no ref holds`);
 		}
@@ -62,10 +62,10 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 			} else {
 				runGit(scope.dir, "checkout", "-q", "--detach", sha);
 				if (tip !== scope.pin && runGit(scope.dir, "merge-base", "--is-ancestor", scope.pin, tip).ok) {
-					writeFileSync(deckFile(ship), `${diveId}\n`);
+					writeFileSync(deckFile(hero), `${diveId}\n`);
 					const rebased = runGit(scope.dir, "rebase", "-q", "--onto", tip, scope.pin);
 					if (!rebased.ok) {
-						throw new Error(`${scope.name}'s work conflicts with ${scope.branch ?? scope.trunk}: finish the rebase in ${relative(ship.dir, scope.dir).replace(/\\/g, "/")} with \`git rebase --continue\`, then jump ${diveId} again\n${rebased.text}`);
+						throw new Error(`${scope.name}'s work conflicts with ${scope.branch ?? scope.trunk}: finish the rebase in ${relative(hero.dir, scope.dir).replace(/\\/g, "/")} with \`git rebase --continue\`, then jump ${diveId} again\n${rebased.text}`);
 					}
 				}
 			}
@@ -74,11 +74,11 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 		if (tip !== scope.pin && runGit(scope.dir, "merge-base", "--is-ancestor", scope.pin, tip).ok && runGit(scope.dir, "merge-base", "--is-ancestor", tip, "HEAD").ok) scope.pin = tip;
 		if (runGit(scope.dir, "log", "-1", "--format=%s").text === wip(dive.doc)) runGit(scope.dir, "reset", "-q", "--mixed", "HEAD^");
 		dive.doc.yaml.setIn(["scopes", dive.scopes.indexOf(scope), scope.repoId, "pin"], scope.pin);
-		lines.push(`- ${scope.name}: ${relative(ship.dir, scope.dir).replace(/\\/g, "/")} on ${runGit(scope.dir, "rev-parse", "--short", "HEAD").text}, pinned at ${scope.pin.slice(0, 7)}${scope.branch ? `, working ${scope.branch}` : ", read-only"}`);
+		lines.push(`- ${scope.name}: ${relative(hero.dir, scope.dir).replace(/\\/g, "/")} on ${runGit(scope.dir, "rev-parse", "--short", "HEAD").text}, pinned at ${scope.pin.slice(0, 7)}${scope.branch ? `, working ${scope.branch}` : ", read-only"}`);
 	}
-	recordDive(ship, dive.doc, { action: "jump", heading: "Jumped", summary: `${me} picked it up`, meta: { diver: me, packer: null }, lines: [`${me} picked it up.`, "", ...lines], also }, ctx);
-	mkdirSync(dirname(deckFile(ship)), { recursive: true });
-	writeFileSync(deckFile(ship), `${diveId}\n`);
+	recordDive(hero, dive.doc, { action: "jump", heading: "Jumped", summary: `${me} picked it up`, meta: { diver: me, packer: null }, lines: [`${me} picked it up.`, "", ...lines], also }, ctx);
+	mkdirSync(dirname(deckFile(hero)), { recursive: true });
+	writeFileSync(deckFile(hero), `${diveId}\n`);
 
 	const at = (path: string) => relative(ctx.cwd, path).replace(/\\/g, "/");
 	ctx.out(`dive  ${at(dive.doc.path)}`);
@@ -87,21 +87,21 @@ export async function i4b0709b1f9bf587aa8452f900544321e(args: Args, ctx: Ctx): P
 }
 
 /** Mints a dive on a feat, pinned where each scope's branch stands, naming its feat and linked from it; returns its id. */
-function mintDive(ship: Ship, dir: string, feat: Doc, ctx: Ctx): string {
+function mintDive(hero: Hero, dir: string, feat: Doc, ctx: Ctx): string {
 	const id = mintUuid();
 	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
 	const scopes = readScopes(feat).map((entry) => {
-		const { dir, trunk } = hydrateRepo(ship, repoDoc(ship, entry.repoId), quiet(ctx));
+		const { dir, trunk } = hydrateRepo(hero, repoDoc(hero, entry.repoId), quiet(ctx));
 		runGit(dir, "fetch", "-q", "origin");
 		const pin = tipOf({ dir, trunk, branch: entry.branch });
 		return { [entry.repoId]: entry.branch ? { "work-branch": entry.branch, pin } : { pin } };
 	});
 	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
-	const doc = shipDoc(ship, minted.id)!;
+	const doc = heroDoc(hero, minted.id)!;
 	doc.yaml.set("scopes", scopes);
 	writeKbDoc(doc.path, doc.yaml, doc.body);
 	const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
-	feat.yaml.set("links", [...links, { [keyOf(ship, doc)]: { rel: "dives.feat" } }]);
+	feat.yaml.set("links", [...links, { [keyOf(hero, doc)]: { rel: "dives.feat" } }]);
 	writeKbDoc(feat.path, feat.yaml, feat.body);
 	return id;
 }

@@ -19,7 +19,7 @@ test("refuses while a dive is open, then fast-forwards trunk to the work branch 
 	assert.equal(f.remoteRef("refs/heads/main"), head);
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "the branch is gone");
 	assert.match(f.doc(f.featId), /\n## Merged \S+\n\n- data: work\/ideas fast-forwarded main at \w{7}\n$/);
-	assert.equal(git(f.ship, "log", "-1", "--format=%s"), "merge(ideas): work branches merged into trunk");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "merge(ideas): work branches merged into trunk");
 });
 
 test("makes a merge commit when trunk moved, and pushes nothing on a conflict", async () => {
@@ -27,8 +27,8 @@ test("makes a merge commit when trunk moved, and pushes nothing on a conflict", 
 	await jump({ ref: f.featId }, f.ctx);
 	f.commit("idea.md", "an idea\n");
 	await land({}, f.ctx);
-	const other = join(f.ship, "..", "other");
-	git(f.ship, "clone", "-q", f.remote, other);
+	const other = join(f.hero, "..", "other");
+	git(f.hero, "clone", "-q", f.remote, other);
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", "trunk moved");
 	git(other, "push", "-q", "origin", "HEAD:refs/heads/main");
 	const moved = git(other, "rev-parse", "HEAD");
@@ -45,8 +45,8 @@ test("refuses a conflict before pushing anything", async () => {
 	await jump({ ref: f.featId }, f.ctx);
 	f.commit("README.md", "ours\n");
 	await land({}, f.ctx);
-	const other = join(f.ship, "..", "other");
-	git(f.ship, "clone", "-q", f.remote, other);
+	const other = join(f.hero, "..", "other");
+	git(f.hero, "clone", "-q", f.remote, other);
 	writeFileSync(join(other, "README.md"), "theirs\n");
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-qam", "theirs");
 	git(other, "push", "-q", "origin", "HEAD:refs/heads/main");

@@ -4,20 +4,20 @@ import { join } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
-import { featRoot, linkedIds, quiet, readScopes, repoDoc, shipDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { featRoot, linkedIds, quiet, readScopes, repoDoc, heroDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 type Merge = { name: string; dir: string; trunk: string; branch: string; result: string; how: string };
 
 export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): Promise<void> {
-	const ship = findBridge(ctx.cwd);
-	if (!ship?.workspace) throw new Error("merge works in a ship, and this is not one");
-	const feat = shipDoc(ship, String(args.feat));
-	if (!feat || !featRoot(ship, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the ship`);
+	const hero = findBridge(ctx.cwd);
+	if (!hero?.workspace) throw new Error("merge works in a hero repo, and this is not one");
+	const feat = heroDoc(hero, String(args.feat));
+	if (!feat || !featRoot(hero, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the hero`);
 	const open = linkedIds(feat)
 		.filter(({ rel }) => rel === "dives.feat")
-		.map(({ id }) => shipDoc(ship, id))
+		.map(({ id }) => heroDoc(hero, id))
 		.filter((doc) => doc?.fm.kind === "dive" && !(doc.fm.meta as { outcome?: unknown } | undefined)?.outcome);
 	if (open.length > 0) throw new Error(`${String(feat.fm.name)} has open dives, so nothing was merged: ${open.map((doc) => String(doc!.fm.name)).join(", ")}`);
 
@@ -27,8 +27,8 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 	try {
 		const refused: string[] = [];
 		for (const entry of readScopes(feat).filter((each) => each.branch)) {
-			const repo = repoDoc(ship, entry.repoId);
-			const { dir, trunk } = hydrateRepo(ship, repo, quiet(ctx));
+			const repo = repoDoc(hero, entry.repoId);
+			const { dir, trunk } = hydrateRepo(hero, repo, quiet(ctx));
 			const name = String(repo.fm.name);
 			const branch = entry.branch!;
 			runGit(dir, "fetch", "-q", "--prune", "origin");
@@ -64,7 +64,7 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 			runGit(merge.dir, "push", "-q", "origin", `:refs/heads/${merge.branch}`);
 			lines.push(`- ${merge.name}: ${merge.branch} ${merge.how} ${merge.trunk} at ${merge.result.slice(0, 7)}`);
 		}
-		recordDive(ship, feat, { action: "merge", heading: "Merged", summary: `work branches merged into trunk`, lines }, ctx);
+		recordDive(hero, feat, { action: "merge", heading: "Merged", summary: `work branches merged into trunk`, lines }, ctx);
 		ctx.out(`merged ${String(feat.fm.name)}\n${lines.join("\n")}`);
 	} finally {
 		for (const { cache, dir } of scratch) runGit(cache, "worktree", "remove", "--force", dir);

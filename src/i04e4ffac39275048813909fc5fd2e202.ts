@@ -7,16 +7,16 @@ import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function i04e4ffac39275048813909fc5fd2e202(_args: Args, ctx: Ctx): Promise<void> {
-	const ship = findBridge(ctx.cwd);
-	if (!ship?.workspace) throw new Error("land works in a ship, and this is not one");
-	const dive = diveOnDeck(ship, ctx);
-	const me = diverOf(ship);
+	const hero = findBridge(ctx.cwd);
+	if (!hero?.workspace) throw new Error("land works in a hero repo, and this is not one");
+	const dive = diveOnDeck(hero, ctx);
+	const me = diverOf(hero);
 	const id = String(dive.doc.fm.id);
 
 	// Every refusal is found before anything is pushed.
 	const refused = readOnlyRefusals(dive);
 	for (const scope of dive.scopes.filter((each) => each.branch)) {
-		const shown = relative(ship.dir, scope.dir).replace(/\\/g, "/");
+		const shown = relative(hero.dir, scope.dir).replace(/\\/g, "/");
 		if (runGit(scope.dir, "status", "--porcelain").text) refused.push(`${shown} has uncommitted changes: commit them first`);
 		if (runGit(scope.dir, "rev-parse", "HEAD").text === scope.pin) continue;
 		runGit(scope.dir, "fetch", "-q", "origin");
@@ -41,7 +41,7 @@ export async function i04e4ffac39275048813909fc5fd2e202(_args: Args, ctx: Ctx): 
 	for (const scope of dive.scopes) {
 		if (runGit(scope.dir, "ls-remote", "--exit-code", "origin", refOf(id)).ok) runGit(scope.dir, "push", "-q", "origin", `:${refOf(id)}`);
 	}
-	recordDive(ship, dive.doc, { action: "land", heading: "Landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, lines: [`${me} landed it.`, "", ...lines] }, ctx);
-	rmSync(deckFile(ship), { force: true });
+	recordDive(hero, dive.doc, { action: "land", heading: "Landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, lines: [`${me} landed it.`, "", ...lines] }, ctx);
+	rmSync(deckFile(hero), { force: true });
 	ctx.out(`landed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }

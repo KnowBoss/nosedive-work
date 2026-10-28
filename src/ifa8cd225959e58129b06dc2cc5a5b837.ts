@@ -8,10 +8,10 @@ import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f147154
 export async function ifa8cd225959e58129b06dc2cc5a5b837(args: Args, ctx: Ctx): Promise<void> {
 	const reason = String(args.why ?? "").trim();
 	if (!reason) throw new Error("bail needs a reason: --reason <why>");
-	const ship = findBridge(ctx.cwd);
-	if (!ship?.workspace) throw new Error("bail works in a ship, and this is not one");
-	const dive = diveOnDeck(ship, ctx);
-	const me = diverOf(ship);
+	const hero = findBridge(ctx.cwd);
+	if (!hero?.workspace) throw new Error("bail works in a hero repo, and this is not one");
+	const dive = diveOnDeck(hero, ctx);
+	const me = diverOf(hero);
 	const ref = refOf(String(dive.doc.fm.id));
 
 	const lines = [`${me} bailed: ${reason}`, ""];
@@ -22,7 +22,7 @@ export async function ifa8cd225959e58129b06dc2cc5a5b837(args: Args, ctx: Ctx): P
 		if (runGit(scope.dir, "ls-remote", "--exit-code", "origin", ref).ok) runGit(scope.dir, "push", "-q", "origin", `:${ref}`);
 		runGit(scope.dir, "checkout", "-q", "--force", "--detach", scope.pin);
 	}
-	recordDive(ship, dive.doc, { action: "bail", heading: "Bailed", summary: reason, meta: { diver: null, outcome: "bailed" }, lines }, ctx);
-	rmSync(deckFile(ship), { force: true });
+	recordDive(hero, dive.doc, { action: "bail", heading: "Bailed", summary: reason, meta: { diver: null, outcome: "bailed" }, lines }, ctx);
+	rmSync(deckFile(hero), { force: true });
 	ctx.out(`bailed ${String(dive.doc.fm.name)}`);
 }

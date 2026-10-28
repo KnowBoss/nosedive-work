@@ -36,8 +36,8 @@ test("refuses uncommitted changes, and a branch that moved past the work", async
 	await assert.rejects(land({}, f.ctx), /nothing was landed:\n {2}workspace\/data has uncommitted changes: commit them first/);
 	git(f.checkout, "clean", "-qf");
 
-	const other = join(f.ship, "..", "other");
-	git(f.ship, "clone", "-q", f.remote, other);
+	const other = join(f.hero, "..", "other");
+	git(f.hero, "clone", "-q", f.remote, other);
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", "theirs");
 	git(other, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
 	await assert.rejects(land({}, f.ctx), new RegExp(`work/ideas in data has moved to \\w{7}, which this dive's work does not contain: pack, then jump ${f.onDeck()}`));

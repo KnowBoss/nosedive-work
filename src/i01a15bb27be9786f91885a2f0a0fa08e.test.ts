@@ -8,10 +8,10 @@ import { fixture, git } from "../test/harness.ts";
 
 test("refuses with nothing on deck, then gives the dive, its feat and each scope where it stands", async () => {
 	const f = fixture("dive-on-deck");
-	const ship = findBridge(f.ship)!;
-	assert.throws(() => diveOnDeck(ship, f.ctx), /no dive is on deck: `nosedive jump <feat or dive>` picks one up/);
+	const hero = findBridge(f.hero)!;
+	assert.throws(() => diveOnDeck(hero, f.ctx), /no dive is on deck: `nosedive jump <feat or dive>` picks one up/);
 	await jump({ ref: f.featId }, f.ctx);
-	const dive = diveOnDeck(ship, f.ctx);
+	const dive = diveOnDeck(hero, f.ctx);
 	assert.equal(dive.doc.fm.id, f.onDeck());
 	assert.equal(dive.feat?.fm.id, f.featId);
 	assert.deepEqual(

@@ -6,10 +6,10 @@ import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function idae870d5677552668a3496e880920f3f(_args: Args, ctx: Ctx): Promise<void> {
-	const ship = findBridge(ctx.cwd);
-	if (!ship?.workspace) throw new Error("pack works in a ship, and this is not one");
-	const dive = diveOnDeck(ship, ctx);
-	const me = diverOf(ship);
+	const hero = findBridge(ctx.cwd);
+	if (!hero?.workspace) throw new Error("pack works in a hero repo, and this is not one");
+	const dive = diveOnDeck(hero, ctx);
+	const me = diverOf(hero);
 	const refused = readOnlyRefusals(dive);
 	if (refused.length > 0) throw new Error(`read-only scopes hold work with nowhere to go, so nothing was packed:\n  ${refused.join("\n  ")}`);
 
@@ -33,7 +33,7 @@ export async function idae870d5677552668a3496e880920f3f(_args: Args, ctx: Ctx): 
 		}
 	}
 	for (const scope of dive.scopes) runGit(scope.dir, "checkout", "-q", "--detach", scope.pin);
-	recordDive(ship, dive.doc, { action: "pack", heading: "Packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, lines: [`${me} put it down.`, "", ...lines] }, ctx);
-	rmSync(deckFile(ship), { force: true });
+	recordDive(hero, dive.doc, { action: "pack", heading: "Packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, lines: [`${me} put it down.`, "", ...lines] }, ctx);
+	rmSync(deckFile(hero), { force: true });
 	ctx.out(`packed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }

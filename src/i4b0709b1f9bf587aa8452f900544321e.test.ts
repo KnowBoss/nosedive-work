@@ -20,9 +20,9 @@ test("a feat the root reaches gets a dive, pinned at trunk while its work branch
 	assert.match(dive, /\n## Jumped \S+\n\ndiver@example\.com picked it up\.\n\n- data: workspace\/data on \w+, pinned at \w{7}, working work\/ideas\n$/);
 	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: dives\\.feat\\n`));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), trunk);
-	assert.equal(git(f.ship, "log", "-1", "--format=%s"), `jump(ideas.${id.slice(-6)}): diver@example.com picked it up`);
-	assert.equal(git(f.ship, "status", "--porcelain"), "", "the feat's link rides the same commit");
-	assert.equal(git(f.ship, "rev-parse", "HEAD"), git(f.ship, "rev-parse", "origin/main"), "the ship is pushed");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), `jump(ideas.${id.slice(-6)}): diver@example.com picked it up`);
+	assert.equal(git(f.hero, "status", "--porcelain"), "", "the feat's link rides the same commit");
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), git(f.hero, "rev-parse", "origin/main"), "the hero is pushed");
 	assert.deepEqual(f.out.slice(-3), [`dive  kb/${id}.md`, `feat  kb/${f.featId}.md`, "data  workspace/data"]);
 });
 
@@ -31,10 +31,10 @@ test("refuses a second dive while one is on deck, a doc that is neither feat nor
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), new RegExp(`dive ${id} is on deck: pack, bail or land it first`));
-	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a root of the ship through a .feat link; link it from a feat first/);
-	git(f.ship, "config", "user.email", "other@example.com");
+	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first/);
+	git(f.hero, "config", "user.email", "other@example.com");
 	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com`));
-	git(f.ship, "config", "user.email", "diver@example.com");
+	git(f.hero, "config", "user.email", "diver@example.com");
 	await jump({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id, "jumping the dive on deck jumps it again");
 });
@@ -47,8 +47,8 @@ test("picks packed work up on its branch's new tip, moving the pin, and refuses 
 	await pack({}, f.ctx);
 
 	// Someone else lands on the work branch meanwhile.
-	const other = join(f.ship, "..", "other");
-	git(f.ship, "clone", "-q", f.remote, other);
+	const other = join(f.hero, "..", "other");
+	git(f.hero, "clone", "-q", f.remote, other);
 	writeFileSync(join(other, "theirs.md"), "theirs\n");
 	git(other, "add", "-A");
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "-m", "theirs");
@@ -66,7 +66,7 @@ test("picks packed work up on its branch's new tip, moving the pin, and refuses 
 	await assert.rejects(jump({ ref: id }, f.ctx), /jump would lose work, so nothing moved:\n {2}workspace\/data is on \w+, which no ref holds/);
 });
 
-test("a feat under a ship's second root gets its dive in that root's directory, its repo registered in .nosedive/repos, and packs and jumps again", async () => {
+test("a feat under a hero's second root gets its dive in that root's directory, its repo registered in .nosedive/repos, and packs and jumps again", async () => {
 	const f = fixture("jump-roots", { roots: true });
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -76,5 +76,5 @@ test("a feat under a ship's second root gets its dive in that root's directory, 
 	await pack({}, f.ctx);
 	await jump({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id);
-	assert.equal(git(f.ship, "status", "--porcelain"), "");
+	assert.equal(git(f.hero, "status", "--porcelain"), "");
 });
