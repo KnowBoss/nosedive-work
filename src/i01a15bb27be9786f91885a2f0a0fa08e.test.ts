@@ -6,7 +6,7 @@ import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck } from "./i01a15bb27be9
 import { i4b0709b1f9bf587aa8452f900544321e as jump } from "./i4b0709b1f9bf587aa8452f900544321e.ts";
 import { fixture, git } from "../test/harness.ts";
 
-test("refuses with nothing on deck, then gives the dive, its feat and each scope where it stands", async () => {
+test("refuses with nothing on deck, then gives the dive, its feat and each scope, its checkout on the dive's branch", async () => {
 	const f = fixture("dive-on-deck");
 	const hero = findBridge(f.hero)!;
 	assert.throws(() => diveOnDeck(hero, f.ctx), /no dive is on deck: `nosedive jump <feat or dive>` picks one up/);
@@ -15,7 +15,8 @@ test("refuses with nothing on deck, then gives the dive, its feat and each scope
 	assert.equal(dive.doc.fm.id, f.onDeck());
 	assert.equal(dive.feat?.fm.id, f.featId);
 	assert.deepEqual(
-		dive.scopes.map(({ repoId, name, trunk, branch, pin }) => ({ repoId, name, trunk, branch, pin })),
-		[{ repoId: f.repoId, name: "data", trunk: "main", branch: "work/ideas", pin: git(f.remote, "rev-parse", "main") }],
+		dive.scopes.map(({ repoId, name, trunk, branch }) => ({ repoId, name, trunk, branch })),
+		[{ repoId: f.repoId, name: "data", trunk: "main", branch: "work/ideas" }],
 	);
+	assert.equal(git(dive.scopes[0]!.dir, "symbolic-ref", "--short", "HEAD"), `${f.heroId}/main/${f.onDeck()}`);
 });

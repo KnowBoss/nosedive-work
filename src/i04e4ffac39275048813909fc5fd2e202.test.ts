@@ -1,5 +1,6 @@
 // land
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,7 +9,7 @@ import { idae870d5677552668a3496e880920f3f as pack } from "./idae870d5677552668a
 import { i04e4ffac39275048813909fc5fd2e202 as land } from "./i04e4ffac39275048813909fc5fd2e202.ts";
 import { fixture, git } from "../test/harness.ts";
 
-test("pushes the work to its feat's branch, deletes the dive's ref, and ends the dive; the next dive starts there", async () => {
+test("pushes the work to its feat's branch, deletes the dive's refs and branch, leaves the checkout detached, and ends the dive; the next dive starts there", async () => {
 	const f = fixture("land");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -19,13 +20,15 @@ test("pushes the work to its feat's branch, deletes the dive's ref, and ends the
 
 	await land({}, f.ctx);
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), head);
-	assert.equal(f.remoteRef(`refs/nosedive/dives/${id}`), "");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive/dives"), "", "the dive's ref is gone");
 	assert.equal(f.remoteRef("refs/heads/main"), git(f.remote, "rev-parse", "main"), "trunk is untouched");
 	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n {2}outcome: landed\\n[^]*\\n## Landed \\S+\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n$`));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), head, "the checkout stays at what it pushed");
+	assert.equal(spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: f.checkout }).status, 1, "detached");
+	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 
 	await jump({ ref: f.featId }, f.ctx);
-	assert.match(f.doc(f.onDeck()), new RegExp(`pin: ${head}\\n`), "a feat's dives stack on its branch");
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), head, "a feat's dives stack on its branch");
 });
 
 test("refuses uncommitted changes, and a branch that moved past the work", async () => {

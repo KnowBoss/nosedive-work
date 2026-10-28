@@ -6,22 +6,26 @@ import { idae870d5677552668a3496e880920f3f as pack } from "./idae870d5677552668a
 import { ifa8cd225959e58129b06dc2cc5a5b837 as bail } from "./ifa8cd225959e58129b06dc2cc5a5b837.ts";
 import { fixture, git } from "../test/harness.ts";
 
-test("records why and what the dive held, deletes its ref, and ends it", async () => {
+test("keeps what the dive held on an orphan ref, records why, deletes its refs and branch, leaves the checkout at its base, and ends it", async () => {
 	const f = fixture("bail");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
-	const pin = git(f.checkout, "rev-parse", "HEAD");
+	const base = git(f.checkout, "rev-parse", "HEAD");
 	f.commit("idea.md", "an idea\n");
 	await pack({}, f.ctx);
 	await jump({ ref: id }, f.ctx);
+	const head = git(f.checkout, "rev-parse", "HEAD");
 	const short = git(f.checkout, "rev-parse", "--short", "HEAD");
 
 	await bail({ why: "a better idea came along" }, f.ctx);
-	assert.equal(git(f.checkout, "rev-parse", "HEAD"), pin);
-	assert.equal(f.remoteRef(`refs/nosedive/dives/${id}`), "", "the ref is gone");
+	const orphan = `refs/nosedive/orphans/${f.heroId}/main/${head}`;
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
+	assert.equal(f.remoteRef(orphan), head, "nothing it held is lost");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive/dives"), "", "the dive's ref is gone");
+	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 	const doc = f.doc(id);
 	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}outcome: bailed\n/);
-	assert.match(doc, new RegExp(`\\n## Bailed \\S+\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md\\n$`));
+	assert.match(doc, new RegExp(`\\n## Bailed \\S+\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md, kept on ${orphan}\\n$`));
 	assert.throws(() => f.onDeck());
 	await assert.rejects(jump({ ref: id }, f.ctx), /is over: it bailed/);
 });

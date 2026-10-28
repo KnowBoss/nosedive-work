@@ -26,10 +26,9 @@ function identify(dir: string): void {
 	git(dir, "config", "user.email", "diver@example.com");
 }
 
-/** A hero repo with a remote, registering one repo, `data`, that has a remote, and a feat its root links scoping it, writable unless `readOnly`. */
 /**
- * A hero repo with one feat on repo `data`. By default an older hero, its root in kb named by its config;
- * `roots` makes it a repo by its config, the feat under a second root in ./docs, and the repo in .nosedive/repos.
+ * A hero repo by its config, registering one repo, `data`, in .nosedive/repos, with a feat on it, writable unless
+ * `readOnly`: under its one root in kb, or with `roots`, under a second root in ./docs.
  */
 export function fixture(label: string, options: { readOnly?: boolean; roots?: boolean } = {}) {
 	const dir = tempDir(label);
@@ -52,19 +51,19 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 	mkdirSync(join(hero, ".nosedive"), { recursive: true });
 	mkdirSync(join(hero, "kb"));
 	const docs = options.roots ? "docs" : "kb";
-	const repos = options.roots ? join(".nosedive", "repos") : "kb";
+	const repos = join(".nosedive", "repos");
 	mkdirSync(join(hero, docs), { recursive: true });
 	mkdirSync(join(hero, repos), { recursive: true });
 	writeFileSync(join(hero, ".nosedive", ".gitignore"), "cache/\ncapes/\nlocal/\n");
 	const feats = `links:\n  - ${docs}/${featId}.md:\n      rel: work.feat\n`;
 	if (options.roots) {
-		const [first, second] = [mintUuid(), mintUuid()];
-		writeFileSync(join(hero, ".nosedive", "config.yaml"), `id: ${heroId}\nworkspace: ./workspace\nroots:\n  - kb/${first}.md\n  - docs/${second}.md\n`);
-		writeFileSync(join(hero, "kb", `${first}.md`), `---\nkind: root\nid: ${first}\nname: kb\ngist: "The first root"\n---\n\n# kb\n`);
+		const second = mintUuid();
+		writeFileSync(join(hero, ".nosedive", "config.yaml"), `id: ${heroId}\nworkspace: ./workspace\nroots:\n  - kb/${heroId}.md\n  - docs/${second}.md\n`);
+		writeFileSync(join(hero, "kb", `${heroId}.md`), `---\nkind: root\nid: ${heroId}\nname: kb\ngist: "The first root"\n---\n\n# kb\n`);
 		writeFileSync(join(hero, "docs", `${second}.md`), `---\nkind: root\nid: ${second}\nname: docs\ngist: "The second root"\n${feats}---\n\n# docs\n`);
 	} else {
-		writeFileSync(join(hero, ".nosedive", "config.yaml"), `kb: ./kb\nship: ${heroId}\n`);
-		writeFileSync(join(hero, "kb", `${heroId}.md`), `---\nkind: ship\nid: ${heroId}\nname: hero\ngist: "A hero repo"\nmeta:\n  workspace: ./workspace\n${feats}---\n\n# hero\n`);
+		writeFileSync(join(hero, ".nosedive", "config.yaml"), `id: ${heroId}\nworkspace: ./workspace\nroots:\n  - kb/${heroId}.md\n`);
+		writeFileSync(join(hero, "kb", `${heroId}.md`), `---\nkind: root\nid: ${heroId}\nname: hero\ngist: "A hero repo"\n${feats}---\n\n# hero\n`);
 	}
 	writeFileSync(join(hero, repos, `${repoId}.md`), `---\nkind: repo\nid: ${repoId}\nname: data\ngist: "Data"\nmeta:\n  trunk: main\n  remotes:\n    origin: ${JSON.stringify(remote)}\n---\n\n# data\n`);
 	const scope = options.readOnly ? `  - ${repoId}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
@@ -81,6 +80,7 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 	const checkout = join(hero, "workspace", "data");
 	return {
 		hero,
+		heroId,
 		remote,
 		featId,
 		repoId,
