@@ -1,8 +1,12 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
+import type { Cape } from "nosedive-core";
 import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
-import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
+import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
+import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -10,25 +14,15 @@ const LOCAL = /^(?:[^:]*\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 /** Ignored files an install or a build remakes, which packs leave out. */
 const REBUILDABLE = /(^|\/)(node_modules|dist|build)\//;
 
-/** One repo a feat or dive works in: its work goes to `branch`, and a scope with none is read-only. */
-export type ScopeEntry = { repoId: string; branch?: string };
-export type Scope = ScopeEntry & { repo: Doc; name: string; dir: string; trunk: string };
+/** One repo a feat or dive works in: its work goes to `branch`, a scope with none is read-only, and `ref` is its dive ref as last seen. */
+export type ScopeEntry = { repoId: string; branch?: string; ref?: string };
+/** A scope with its checkout, which is the dive's when on the dive's local branch, or present when read-only. */
+export type Scope = ScopeEntry & { repo: Doc; name: string; dir: string; trunk: string; ours: boolean };
 export type Dive = { hero: Hero; doc: Doc; feat: Doc | undefined; scopes: Scope[] };
 type Say = { out(text: string): void; err(text: string): void };
 
-/** Where a hero repo names the dive on deck. */
-export function deckFile(hero: Hero): string {
-	return join(hero.dir, ".nosedive", "local", "dive");
-}
-
-/** The id of the dive on deck, if any. */
-export function onDeckId(hero: Hero): string | undefined {
-	const deck = deckFile(hero);
-	return (existsSync(deck) ? readFileSync(deck, "utf8").trim() : "") || undefined;
-}
-
-/** Who is diving: the hero's git user.email. */
-export function diverOf(hero: Hero): string {
+/** The hero's git user.email, which names a packer and starts a diver. */
+export function emailOf(hero: Hero): string {
 	const email = runGit(hero.dir, "config", "user.email").text;
 	if (!email) throw new Error("git has no user.email here, and a dive is held by one: set it with `git config user.email`");
 	return email;
@@ -41,12 +35,29 @@ export function heroBranch(hero: Hero): string {
 	return on.text;
 }
 
+/** Who holds a dive from this checkout of the hero: `<email>#<holder token>`. */
+export function holderOf(hero: Hero): string {
+	const email = emailOf(hero);
+	const top = runGit(hero.dir, "rev-parse", "--show-toplevel").text;
+	return `${email}#${createHash("sha256").update(`${top}/${heroBranch(hero)}/${email}`).digest("hex").slice(0, 12)}`;
+}
+
+/** The hero's trunk: the branch origin's HEAD named when last fetched. */
+export function heroTrunk(hero: Hero): string {
+	return runGit(hero.dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "") || "main";
+}
+
+/** Fetches a repo's branches and nosedive refs from origin. */
+export function fetchAll(dir: string): void {
+	runGit(dir, "fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/nosedive/*:refs/nosedive/*");
+}
+
 /** The dive's local branch in each writable scope, as core's hydrate-repo names a feat's. */
 export function localBranch(hero: Hero, diveId: string): string {
 	return `${hero.id}/${heroBranch(hero)}/${diveId}`;
 }
 
-/** Where pack keeps a dive's work on origin. */
+/** Where a dive's work from this hero checkout is kept on each repo's origin. */
 export function diveRef(hero: Hero, diveId: string): string {
 	return `refs/nosedive/dives/${localBranch(hero, diveId)}`;
 }
@@ -56,7 +67,7 @@ export function wip(dive: Doc): string {
 	return `pack(${String(dive.fm.name)}): work in progress`;
 }
 
-/** Every ref of the dive on origin, pushed from any hero, newest first. */
+/** Every ref of the dive on origin, pushed from any hero, newest first, as last fetched. */
 export function diveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
 	return runGit(dir, "ls-remote", "origin", "refs/nosedive/dives/*")
 		.text.split("\n")
@@ -69,7 +80,7 @@ export function diveRefs(dir: string, diveId: string): { ref: string; sha: strin
 		.sort((a, b) => Number(runGit(dir, "log", "-1", "--format=%ct", b.sha).text || 0) - Number(runGit(dir, "log", "-1", "--format=%ct", a.sha).text || 0));
 }
 
-/** Deletes refs on origin and their copies in the cache. */
+/** Deletes refs on origin and their copies here. */
 export function deleteRefs(dir: string, refs: string[]): void {
 	for (const ref of refs) {
 		runGit(dir, "push", "-q", "origin", `:${ref}`);
@@ -97,7 +108,36 @@ export function orphan(hero: Hero, dir: string): { ref: string; commits: string[
 export function trunkOf(repo: Doc, dir: string): string {
 	const trunk = (repo.fm.meta as { trunk?: unknown } | undefined)?.trunk;
 	if (typeof trunk === "string") return trunk;
-	return runGit(dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "") || "main";
+	return (existsSync(dir) && runGit(dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "")) || "main";
+}
+
+/** Where a scope's work starts: its work branch on origin when there is one, else trunk. */
+export function baseOf(scope: { dir: string; branch?: string; trunk: string }): string {
+	const branch = `refs/remotes/origin/${scope.branch}`;
+	return scope.branch && runGit(scope.dir, "rev-parse", "--verify", "-q", branch).ok ? branch : `refs/remotes/origin/${scope.trunk}`;
+}
+
+/**
+ * Pushes the commits on one side of `range` that lack them through new commits, each with the same tree, author and
+ * committer, its message given the trailers; plumbing, so no hook runs. Moves HEAD to the last; returns how many.
+ */
+export function stamp(dir: string, range: string[], trailers: string[]): number {
+	const shas = runGit(dir, "rev-list", "--reverse", "--topo-order", ...range).text.split("\n").filter(Boolean);
+	const made = new Map<string, string>();
+	for (const sha of shas) {
+		const [an, ae, ad, cn, ce, cd, parents, tree] = runGit(dir, "log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%P%x00%T", sha).text.split("\0") as string[];
+		const message = spawnSync("git", ["log", "-1", "--format=%B", sha], { cwd: dir, encoding: "utf8" }).stdout;
+		const args = ["interpret-trailers", "--if-exists", "doNothing", ...trailers.flatMap((trailer) => ["--trailer", trailer])];
+		const stamped = spawnSync("git", args, { cwd: dir, encoding: "utf8", input: message }).stdout;
+		const env = { ...process.env, GIT_AUTHOR_NAME: an, GIT_AUTHOR_EMAIL: ae, GIT_AUTHOR_DATE: ad, GIT_COMMITTER_NAME: cn, GIT_COMMITTER_EMAIL: ce, GIT_COMMITTER_DATE: cd };
+		const parentArgs = (parents ?? "").split(" ").filter(Boolean).flatMap((parent) => ["-p", made.get(parent) ?? parent]);
+		const result = spawnSync("git", ["commit-tree", tree!, ...parentArgs], { cwd: dir, encoding: "utf8", input: stamped, env });
+		if (result.status !== 0) throw new Error(`cannot stamp ${sha.slice(0, 7)} in ${dir}: ${result.stderr.trim()}`);
+		made.set(sha, result.stdout.trim());
+	}
+	const last = shas.at(-1);
+	if (last) runGit(dir, "update-ref", "HEAD", made.get(last)!);
+	return shas.length;
 }
 
 /** The ignored files a pack keeps: all but those an install or a build remakes. */
@@ -171,17 +211,42 @@ function same(a: Record<string, Uint8Array>, b: Record<string, Uint8Array>): boo
 	return keys.length === Object.keys(b).length && keys.every((key) => b[key] !== undefined && Buffer.compare(a[key]!, b[key]!) === 0);
 }
 
-/** The scopes a feat or dive names: `- <repo>: { work-branch }`, or a bare repo quid, read-only. */
-export function readScopes(doc: Doc): ScopeEntry[] {
+/** The scopes a feat or dive names: `- <repo>: { work-branch, ref }`, or a bare repo quid, read-only; the entry keyed by `skip`, the hero's, aside. */
+export function readScopes(doc: Doc, skip?: string): ScopeEntry[] {
 	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes : [];
 	return scopes.flatMap((entry): ScopeEntry[] => {
-		if (typeof entry === "string") return [{ repoId: entry }];
+		if (typeof entry === "string") return entry === skip ? [] : [{ repoId: entry }];
 		if (!entry || typeof entry !== "object") return [];
-		return Object.entries(entry as Record<string, Record<string, unknown> | null>).map(([repoId, value]) => ({
-			repoId,
-			branch: typeof value?.["work-branch"] === "string" ? value["work-branch"] : undefined,
-		}));
+		return Object.entries(entry as Record<string, Record<string, unknown> | null>)
+			.filter(([repoId]) => repoId !== skip)
+			.map(([repoId, value]) => ({
+				repoId,
+				branch: typeof value?.["work-branch"] === "string" ? value["work-branch"] : undefined,
+				ref: typeof value?.ref === "string" ? value.ref : undefined,
+			}));
 	});
+}
+
+/** The hero's dive ref as a dive last saw it, in its scope keyed by the hero's id. */
+export function heroRef(hero: Hero, doc: Doc): string | undefined {
+	const entries = Array.isArray(doc.fm.scopes) ? doc.fm.scopes : [];
+	for (const entry of entries) {
+		const value = entry && typeof entry === "object" ? (entry as Record<string, { ref?: unknown } | null>)[hero.id!] : undefined;
+		if (typeof value?.ref === "string") return value.ref;
+	}
+	return undefined;
+}
+
+/** A dive's scopes with each `ref` as given, keyed by repo id, the hero's included; one given none loses it. */
+export function scopesWith(hero: Hero, doc: Doc, refs: Map<string, string | undefined>): unknown[] {
+	const scopes: unknown[] = readScopes(doc, hero.id).map((entry) => {
+		const ref = refs.has(entry.repoId) ? refs.get(entry.repoId) : entry.ref;
+		if (!entry.branch && !ref) return entry.repoId;
+		return { [entry.repoId]: { ...(entry.branch ? { "work-branch": entry.branch } : {}), ...(ref ? { ref } : {}) } };
+	});
+	const ref = refs.has(hero.id!) ? refs.get(hero.id!) : heroRef(hero, doc);
+	if (ref) scopes.push({ [hero.id!]: { ref } });
+	return scopes;
 }
 
 /** A doc of the hero itself, in its bridge or any of its decks, never one of its workspace's repos. */
@@ -202,29 +267,11 @@ export function featOf(dive: Doc): string {
 	return String((dive.fm.meta as { feat?: unknown } | undefined)?.feat);
 }
 
-export function i01a15bb27be9786f91885a2f0a0fa08e(hero: Hero, ctx: Say, id?: string): Dive {
-	const diveId = id ?? onDeckId(hero);
-	if (!diveId) throw new Error("no dive is on deck: `nosedive jump <feat or dive>` picks one up");
-	const doc = heroDoc(hero, diveId);
-	if (doc?.fm.kind !== "dive") throw new Error(`${diveId} is no dive in the hero`);
-	const feat = heroDoc(hero, featOf(doc));
-	const scopes = readScopes(doc).map((entry): Scope => {
-		const repo = repoDoc(hero, entry.repoId);
-		const { dir, trunk } = hydrateRepo(hero, repo, quiet(ctx), entry.branch ? { id: diveId, workBranch: entry.branch } : undefined);
-		return { ...entry, repo, name: String(repo.fm.name), dir, trunk };
-	});
-	return { hero, doc, feat, scopes };
-}
-
-/** Why each read-only scope holds work it cannot publish: commits origin lacks, or uncommitted changes. */
-export function readOnlyRefusals(dive: Dive): string[] {
-	return dive.scopes
-		.filter((scope) => !scope.branch)
-		.flatMap((scope) => {
-			if (unpushed(scope.dir).length > 0) return [`${scope.name} is read-only, yet has commits origin lacks`];
-			if (runGit(scope.dir, "status", "--porcelain").text) return [`${scope.name} is read-only, yet has uncommitted changes`];
-			return [];
-		});
+/** A dive's open/held state. */
+export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: string } {
+	const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
+	const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome) };
 }
 
 /** The ids a doc links within its own repo, with each link's rel; a link naming another repo (<repo>:<id>) is left out. */
@@ -238,10 +285,11 @@ export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
 }
 
 /**
- * The directory of the root that reaches a doc through links whose rel ends .feat, which is what makes it a feat;
- * a cape root's feats are its actions, not work.
+ * Every feat the hero's roots reach through links whose rel ends .feat, with the directory of the root that reaches it
+ * and the docs that link it so; a cape root's feats are its actions, not work.
  */
-export function featRoot(hero: Hero, id: string): string | undefined {
+export function featTree(hero: Hero): Map<string, { dir: string; parents: string[] }> {
+	const tree = new Map<string, { dir: string; parents: string[] }>();
 	for (const root of hero.roots) {
 		if (heroDoc(hero, root.id)?.fm.kind === "cape") continue;
 		const seen = new Set<string>();
@@ -253,12 +301,44 @@ export function featRoot(hero: Hero, id: string): string | undefined {
 			const doc = heroDoc(hero, at);
 			for (const link of doc ? linkedIds(doc) : []) {
 				if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
-				if (link.id === id) return root.dir;
+				const node = tree.get(link.id) ?? { dir: root.dir, parents: [] };
+				node.parents.push(at);
+				tree.set(link.id, node);
 				queue.push(link.id);
 			}
 		}
 	}
-	return undefined;
+	return tree;
+}
+
+/** The directory of the root that reaches a feat, which is what makes it one. */
+export function featRoot(hero: Hero, id: string): string | undefined {
+	return featTree(hero).get(id)?.dir;
+}
+
+/** Every dive the hero's feats reach that is not over. */
+export function openDives(hero: Hero): Doc[] {
+	return [...featTree(hero).keys()].flatMap((id) => {
+		const doc = heroDoc(hero, id);
+		return doc?.fm.kind === "dive" && !metaOf(doc).outcome ? [doc] : [];
+	});
+}
+
+/** The dive's first durable feat ancestor, its own feat when none is found. */
+export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
+	const tree = featTree(hero);
+	const dirs = [hero.kbDir, ...hero.roots.map((root) => root.dir)];
+	const queue = [featOf(dive)];
+	const seen = new Set<string>();
+	while (queue.length > 0) {
+		const id = queue.shift()!;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		const doc = heroDoc(hero, id);
+		if (doc && findKind(String(doc.fm.kind), dirs, capes, hero)?.durable === true) return id;
+		queue.push(...(tree.get(id)?.parents ?? []));
+	}
+	return featOf(dive);
 }
 
 /** How a doc in the hero's kb is linked: its path from the hero's root, bridge/<id>.md in a seeded hero. */
@@ -269,4 +349,141 @@ export function keyOf(hero: Hero, doc: Doc): string {
 /** Hydration says only what it changed: a checkout already there is no news. */
 export function quiet(ctx: Say) {
 	return { out: (text: string) => (/checked out already$/.test(text) ? undefined : ctx.out(text)), err: ctx.err };
+}
+
+/** A dive's scopes with their checkouts, none hydrated or moved. */
+export function scopesOf(hero: Hero, doc: Doc): Scope[] {
+	const id = String(doc.fm.id);
+	return readScopes(doc, hero.id).map((entry): Scope => {
+		const repo = repoDoc(hero, entry.repoId);
+		const name = String(repo.fm.name);
+		const dir = checkoutPath(hero, name);
+		const there = existsSync(dir);
+		const ours = there && (entry.branch ? runGit(dir, "symbolic-ref", "-q", "--short", "HEAD").text === localBranch(hero, id) : true);
+		return { ...entry, repo, name, dir, trunk: trunkOf(repo, dir), ours };
+	});
+}
+
+/** One line per scope of a dive: whether its checkout is the dive's, and how many commits it holds origin lacks. */
+function stateOf(hero: Hero, doc: Doc): string {
+	const parts = scopesOf(hero, doc).map((scope) => (scope.ours ? `${scope.name} on its branch, ${unpushed(scope.dir).length} commits origin lacks` : `${scope.name} not checked out for it`));
+	return `${String(doc.fm.name)} (${String(doc.fm.id)}): ${parts.join("; ") || "no scopes"}`;
+}
+
+export function i01a15bb27be9786f91885a2f0a0fa08e(hero: Hero, _ctx: Say, id?: string): Dive {
+	const holder = holderOf(hero);
+	const held = openDives(hero).filter((doc) => metaOf(doc).diver === holder);
+	let doc: Doc | undefined;
+	if (id) {
+		doc = held.find((each) => each.fm.id === id);
+		if (!doc) throw new Error(`this checkout of the hero holds no dive ${id}`);
+	} else if (held.length === 0) {
+		throw new Error("this checkout of the hero holds no dive: `nosedive jump <feat or dive>` picks one up");
+	} else if (held.length > 1) {
+		throw new Error(`this checkout of the hero holds ${held.length} dives, so name one:\n  ${held.map((each) => stateOf(hero, each)).join("\n  ")}`);
+	} else {
+		doc = held[0]!;
+	}
+	return { hero, doc, feat: heroDoc(hero, featOf(doc)), scopes: scopesOf(hero, doc) };
+}
+
+/** Why each read-only scope holds work it cannot publish: commits origin lacks, or uncommitted changes. */
+export function readOnlyRefusals(dive: Dive): string[] {
+	return dive.scopes
+		.filter((scope) => !scope.branch && scope.ours)
+		.flatMap((scope) => {
+			if (unpushed(scope.dir).length > 0) return [`${scope.name} is read-only, yet has commits origin lacks`];
+			if (runGit(scope.dir, "status", "--porcelain").text) return [`${scope.name} is read-only, yet has uncommitted changes`];
+			return [];
+		});
+}
+
+/** One repo a dive's work is put down from: a writable scope's checkout, or the hero. */
+type Put = { key: string; name: string; dir: string; base: string; recorded: string | undefined; commits: string[]; sha?: string };
+
+/**
+ * Puts a dive down, for pack and bail: uncommitted work committed, each repo's work pushed to the dive's ref with a
+ * lease against what the dive last saw, checkouts left detached at their base, the hero reset to trunk. Returns each
+ * repo's commits and the ref values to record.
+ */
+export function putDown(dive: Dive): { puts: Put[]; refs: Map<string, string | undefined>; own: string } {
+	const { hero } = dive;
+	const id = String(dive.doc.fm.id);
+	const own = diveRef(hero, id);
+	const trunk = heroTrunk(hero);
+	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
+	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
+	for (const scope of writable) fetchAll(scope.dir);
+	const puts: Put[] = [
+		...writable.map((scope): Put => ({ key: scope.repoId, name: scope.name, dir: scope.dir, base: baseOf(scope), recorded: scope.ref, commits: [] })),
+		{ key: hero.id!, name: "hero", dir: hero.dir, base: `refs/remotes/origin/${trunk}`, recorded: heroRef(hero, dive.doc), commits: [] },
+	];
+
+	// Every lease is checked before anything is committed or pushed.
+	const observed = new Map(puts.map((put) => [put.key, diveRefs(put.dir, id)]));
+	const moved = puts.flatMap((put) => {
+		const newest = observed.get(put.key)![0];
+		return newest?.sha === put.recorded ? [] : [`${put.name}: ${newest ? `${newest.ref} is at ${newest.sha.slice(0, 7)}` : "the dive's ref is gone"}, which this dive did not see`];
+	});
+	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
+
+	for (const put of puts) {
+		if (runGit(put.dir, "status", "--porcelain").text) {
+			runGit(put.dir, "add", "-A");
+			const committed = runGit(put.dir, "commit", "-q", "-m", wip(dive.doc));
+			if (!committed.ok) throw new Error(`cannot commit ${put.name}'s uncommitted work: ${committed.text}`);
+		}
+		put.commits = runGit(put.dir, "log", "--format=%h %s", put.base + "..HEAD").text.split("\n").filter(Boolean);
+		const refs = observed.get(put.key)!;
+		const leases = refs.flatMap(({ ref, sha }) => [`--force-with-lease=${ref}:${sha}`, ...(ref === own && put.commits.length > 0 ? [] : [`:${ref}`])]);
+		if (put.commits.length > 0) {
+			if (!refs.some(({ ref }) => ref === own)) leases.push(`--force-with-lease=${own}:`);
+			leases.push(`HEAD:${own}`);
+		}
+		if (leases.length > 0) {
+			const pushed = runGit(put.dir, "push", "-q", "--atomic", "origin", ...leases);
+			if (!pushed.ok) throw new Error(`cannot push ${put.name}'s work to ${own}: ${pushed.text}`);
+		}
+		for (const { ref } of refs) if (ref !== own) runGit(put.dir, "update-ref", "-d", ref);
+		if (put.commits.length > 0) {
+			put.sha = runGit(put.dir, "rev-parse", "HEAD").text;
+			runGit(put.dir, "update-ref", own, put.sha);
+		} else runGit(put.dir, "update-ref", "-d", own);
+	}
+
+	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, featOf(dive.doc), scope);
+	for (const scope of writable) {
+		const base = runGit(scope.dir, "merge-base", "HEAD", baseOf(scope)).text || baseOf(scope);
+		const ignored = runGit(scope.dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").text.split("\n").filter(Boolean);
+		runGit(scope.dir, "checkout", "-q", "--detach", base);
+		// What the base does not ignore would read as untracked work; the feat's pack holds what is worth keeping.
+		if (ignored.length > 0) runGit(scope.dir, "clean", "-q", "-f", "-d", "--", ...ignored);
+		runGit(scope.dir, "branch", "-q", "-D", localBranch(hero, id));
+	}
+	runGit(hero.dir, "reset", "-q", "--hard", `refs/remotes/origin/${trunk}`);
+	return { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
+}
+
+/**
+ * Commits a record on top of the hero's branch with `record` and pushes it to trunk; when trunk moved meanwhile, it
+ * drops the record, rebases onto the new tip and records again.
+ */
+export function pushTrunk(hero: Hero, record: () => void): void {
+	const trunk = heroTrunk(hero);
+	for (let tries = 0; ; tries++) {
+		record();
+		const pushed = runGit(hero.dir, "push", "-q", "origin", `HEAD:refs/heads/${trunk}`);
+		if (pushed.ok) {
+			runGit(hero.dir, "update-ref", `refs/remotes/origin/${trunk}`, "HEAD");
+			return;
+		}
+		runGit(hero.dir, "reset", "-q", "--hard", "HEAD^");
+		if (tries === 2) throw new Error(`cannot push the hero's record to ${trunk}: ${pushed.text}`);
+		runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
+		const rebased = runGit(hero.dir, "rebase", "-q", `refs/remotes/origin/${trunk}`);
+		if (!rebased.ok) {
+			runGit(hero.dir, "rebase", "--abort");
+			throw new Error(`the hero's work conflicts with ${trunk} as it moved: ${rebased.text}`);
+		}
+	}
 }

@@ -3,17 +3,18 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { i4b0709b1f9bf587aa8452f900544321e as jump } from "./i4b0709b1f9bf587aa8452f900544321e.ts";
-import { i04e4ffac39275048813909fc5fd2e202 as land } from "./i04e4ffac39275048813909fc5fd2e202.ts";
+import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
+import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { ic5b0c0d5fa525fcab3d57e72cd3cde83 as merge } from "./ic5b0c0d5fa525fcab3d57e72cd3cde83.ts";
 import { fixture, git } from "../test/harness.ts";
 
 test("refuses while a dive is open, then fast-forwards trunk to the work branch and deletes it", async () => {
 	const f = fixture("merge");
 	await jump({ ref: f.featId }, f.ctx);
-	const head = f.commit("idea.md", "an idea\n");
+	f.commit("idea.md", "an idea\n");
 	await assert.rejects(merge({ feat: f.featId }, f.ctx), /ideas has open dives, so nothing was merged: ideas\.\w{6}/);
 	await land({}, f.ctx);
+	const head = git(f.checkout, "rev-parse", "HEAD");
 
 	await merge({ feat: f.featId }, f.ctx);
 	assert.equal(f.remoteRef("refs/heads/main"), head);

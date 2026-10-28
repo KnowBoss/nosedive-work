@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
-import { featRoot, linkedIds, quiet, readScopes, repoDoc, heroDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { featRoot, heroTrunk, linkedIds, pushTrunk, quiet, readScopes, repoDoc, heroDoc } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -15,6 +15,10 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 	if (!hero?.workspace) throw new Error("merge works in a hero repo, and this is not one");
 	const feat = heroDoc(hero, String(args.feat));
 	if (!feat || !featRoot(hero, String(args.feat))) throw new Error(`${String(args.feat)} is no feat in the hero`);
+	const trunk = heroTrunk(hero);
+	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
+	if (runGit(hero.dir, "rev-list", "--count", `refs/remotes/origin/${trunk}..HEAD`).text !== "0") throw new Error(`the hero holds commits ${trunk} lacks, so nothing was merged: pack or land the dive they belong to first`);
+	const featId = String(feat.fm.id);
 	const open = linkedIds(feat)
 		.filter(({ rel }) => rel === "dives.feat")
 		.map(({ id }) => heroDoc(hero, id))
@@ -64,7 +68,7 @@ export async function ic5b0c0d5fa525fcab3d57e72cd3cde83(args: Args, ctx: Ctx): P
 			runGit(merge.dir, "push", "-q", "origin", `:refs/heads/${merge.branch}`);
 			lines.push(`- ${merge.name}: ${merge.branch} ${merge.how} ${merge.trunk} at ${merge.result.slice(0, 7)}`);
 		}
-		recordDive(hero, feat, { action: "merge", heading: "Merged", summary: `work branches merged into trunk`, lines }, ctx);
+		pushTrunk(hero, () => recordDive(hero, heroDoc(hero, featId)!, { action: "merge", heading: "Merged", summary: `work branches merged into trunk`, lines }));
 		ctx.out(`merged ${String(feat.fm.name)}\n${lines.join("\n")}`);
 	} finally {
 		for (const { cache, dir } of scratch) runGit(cache, "worktree", "remove", "--force", dir);

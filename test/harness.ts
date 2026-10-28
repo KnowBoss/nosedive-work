@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { after } from "node:test";
 import type { Ctx } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
+import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
+import { holderOf, metaOf, openDives } from "../src/i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 const root = mkdtempSync(join(tmpdir(), "nosedive-work-"));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -47,13 +49,15 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 	const hero = join(dir, "hero");
 	git(dir, "clone", "-q", heroRemote, hero);
 	identify(hero);
-	const [heroId, repoId, featId] = [mintUuid(), mintUuid(), mintUuid()];
+	const [heroId, repoId, featId, memoKind] = [mintUuid(), mintUuid(), mintUuid(), mintUuid()];
 	mkdirSync(join(hero, ".nosedive"), { recursive: true });
 	mkdirSync(join(hero, "kb"));
 	const docs = options.roots ? "docs" : "kb";
 	const repos = join(".nosedive", "repos");
 	mkdirSync(join(hero, docs), { recursive: true });
 	mkdirSync(join(hero, repos), { recursive: true });
+	mkdirSync(join(hero, ".nosedive", "kinds"));
+	writeFileSync(join(hero, ".nosedive", "kinds", `${memoKind}.md`), `---\nkind: kind\nid: ${memoKind}\nname: memo\ngist: "A note"\nmeta:\n  durable: true\n---\n\n# Memo\n`);
 	writeFileSync(join(hero, ".nosedive", ".gitignore"), "cache/\ncapes/\nlocal/\n");
 	const feats = `links:\n  - ${docs}/${featId}.md:\n      rel: work.feat\n`;
 	if (options.roots) {
@@ -88,8 +92,13 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		ctx,
 		out,
 		err,
-		/** The dive on deck's id. */
-		onDeck: () => readFileSync(join(hero, ".nosedive", "local", "dive"), "utf8").trim(),
+		/** The id of the dive this checkout of the hero holds. */
+		onDeck(): string {
+			const bridge = findBridge(hero)!;
+			const held = openDives(bridge).find((doc) => metaOf(doc).diver === holderOf(bridge));
+			if (!held) throw new Error("this checkout holds no dive");
+			return String(held.fm.id);
+		},
 		doc: (id: string) => readFileSync(join(hero, docs, `${id}.md`), "utf8"),
 		/** Writes and commits a file in the data checkout. */
 		commit(file: string, text: string): string {
