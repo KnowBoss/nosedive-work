@@ -8,6 +8,8 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 
 const root = mkdtempSync(join(tmpdir(), "nosedive-work-"));
 after(() => rmSync(root, { recursive: true, force: true }));
+// Core keeps repo caches in the user's dir; a test's go in its own.
+process.env.NOSEDIVE_USER_DIR = mkdtempSync(join(root, "user-"));
 
 export function tempDir(label: string): string {
 	return mkdtempSync(join(root, `${label}-`));
