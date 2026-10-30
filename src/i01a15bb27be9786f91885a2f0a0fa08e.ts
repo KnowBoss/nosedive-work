@@ -8,22 +8,16 @@ import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core"
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
+import { CORE_OWNER } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
-/** The seeded ids of work and of core, which own the kinds this cape reads. */
+/** Work's seeded id, which owns the dive kind. */
 export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
-const CORE_ID = "01a1336b-c0b8-7cde-b7c6-285196062297";
-
-/** A doc's kind by core's rules, which refuse a bare repo quid in scopes: one is read as an entry with none of its own. */
-function kindOf(doc: Doc): ReturnType<typeof docKind> {
-	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes.map((entry) => (typeof entry === "string" ? { [entry]: {} } : entry)) : doc.fm.scopes;
-	return docKind({ fm: { ...doc.fm, scopes }, path: doc.path });
-}
 
 /** Whether a doc's kind is work's dive, whichever repo holds the doc. */
 export function isDive(doc: Doc): boolean {
-	const kind = kindOf(doc);
+	const kind = docKind(doc);
 	return kind.owner === WORK_ID && kind.name === "dive";
 }
 
@@ -281,7 +275,7 @@ export function heroDoc(hero: Hero, id: string): Doc | undefined {
 export function repoDoc(hero: Hero, repoId: string): Doc {
 	const repo = heroDoc(hero, repoId);
 	const kind = repo && docKind(repo);
-	if (!repo || kind?.owner !== CORE_ID || kind.name !== "repo") throw new Error(`${repoId} is no repo registered in the hero`);
+	if (!repo || kind?.owner !== CORE_OWNER || kind.name !== "repo") throw new Error(`${repoId} is no repo registered in the hero`);
 	return repo;
 }
 
@@ -315,8 +309,8 @@ export function featTree(hero: Hero): Map<string, { dir: string; parents: string
 	const tree = new Map<string, { dir: string; parents: string[] }>();
 	for (const root of hero.roots) {
 		const rootDoc = heroDoc(hero, root.id);
-		const rootKind = rootDoc && kindOf(rootDoc);
-		if (rootKind?.owner === CORE_ID && rootKind.name === "cape") continue;
+		const rootKind = rootDoc && docKind(rootDoc);
+		if (rootKind?.owner === CORE_OWNER && rootKind.name === "cape") continue;
 		const seen = new Set<string>();
 		const queue = [root.id];
 		while (queue.length > 0) {
@@ -360,7 +354,7 @@ export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
 		seen.add(id);
 		const doc = heroDoc(hero, id);
 		if (doc) {
-			const kind = kindOf(doc);
+			const kind = docKind(doc);
 			const spelling = kind.owner === hero.id ? kind.name : `${kind.owner}:${kind.name}`;
 			if (findKind(spelling, hero, capes)?.durable === true) return id;
 		}

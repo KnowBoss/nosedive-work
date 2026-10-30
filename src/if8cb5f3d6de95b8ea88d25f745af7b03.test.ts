@@ -155,7 +155,26 @@ test("pack, jump and land preserve the canonical version while work refs keep th
 
 test("an unpublished dive schema refuses before jump moves a scope", async () => {
 	const f = fixture("unpublished-dive");
-	(f.ctx.capes[1]!.kinds.dive as { published: boolean }).published = false;
+	newSchema(f);
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), /land|push/);
 	assert.equal(existsSync(f.checkout), false);
 });
+
+test("a dive schema on the feat's work branch is accepted and pinned", async () => {
+	const f = fixture("work-branch-dive");
+	const version = newSchema(f);
+	git(f.schemaRepo, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+	await jump({ ref: f.featId }, f.ctx);
+	assert.ok(f.doc(f.onDeck()).includes(`      version: ${version}\n`));
+	assert.match(f.doc(f.onDeck()), /\n {6}schema: [0-9a-f]{12}\n/);
+});
+
+/** Commits a change to the dive schema's repo that origin's trunk lacks, and makes it the kind's version. */
+function newSchema(f: ReturnType<typeof fixture>): string {
+	writeFileSync(join(f.schemaRepo, "schema.txt"), "new schema\n");
+	git(f.schemaRepo, "add", "schema.txt");
+	git(f.schemaRepo, "commit", "-q", "-m", "new schema");
+	const version = git(f.schemaRepo, "rev-parse", "HEAD");
+	(f.ctx.capes[1]!.kinds.dive as { version: string }).version = version;
+	return version;
+}

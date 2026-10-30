@@ -7,6 +7,7 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
+import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
 import { WORK_ID, isDive as isWorkDive, emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, wip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
@@ -195,8 +196,8 @@ function switchTo(dir: string, local: string, workBranch: string, trunk: string)
 function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): void {
 	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
 	const scopes: unknown[] = readScopes(feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
-	const kind = diveKind(hero, ctx);
-	if (kind.owner !== hero.id) scopes.push({ [kind.owner]: { canonical: true, version: kind.version } });
+	const { owner, pin } = diveKind(hero, ctx);
+	if (owner !== hero.id) scopes.push({ [owner]: { canonical: true, ...pin } });
 	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
 	const doc = heroDoc(hero, minted.id)!;
 	doc.yaml.set("scopes", scopes);
@@ -206,10 +207,9 @@ function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): voi
 	writeKbDoc(feat.path, feat.yaml, feat.body);
 }
 
-/** Work's dive kind and the schema commit a dive is minted at, which must be published. */
+/** Work's dive kind with the pin a dive is minted at, which refuses a schema that is not published. */
 function diveKind(hero: Hero, ctx: Ctx) {
 	const kind = findKind(`${WORK_ID}:dive`, hero, ctx.capes);
 	if (!kind) throw new Error("work:dive names no kind here: the hero must wear the work cape");
-	if (!kind.version || !kind.published) throw new Error("the schema of kind work:dive is not on its owner's origin trunk: land or push it first");
-	return kind;
+	return { owner: kind.owner, pin: pinOf(kind, hero) };
 }

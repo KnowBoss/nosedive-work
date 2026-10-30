@@ -81,8 +81,8 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 	const out: string[] = [];
 	const err: string[] = [];
 	const schemaVersion = git(seed, "rev-parse", "HEAD");
-	const cape = (id: string, name: string, kinds: Record<string, unknown>) => ({ id, owner: id, shortName: name, name, commit: schemaVersion, version: "test", docs: {}, index: {}, kinds });
-	const capes = [cape("01a1336b-c0b8-7cde-b7c6-285196062297", "core", {}), cape("01a15bb1-da9e-7d2d-aa82-5ee97257adc6", "work", { dive: { id: "01a15bb2-5092-7858-90dd-e6c5b1b45254", version: schemaVersion, published: true, repoDir: seed } })];
+	const cape = (id: string, shortName: string, name: string, kinds: Record<string, unknown>, repoDir?: string) => ({ id, owner: id, shortName, name, repoDir, commit: schemaVersion, version: "test", docs: {}, index: {}, kinds });
+	const capes = [cape("01a1336b-c0b8-7cde-b7c6-285196062297", "core", "core", {}), cape("01a15bb1-da9e-7d2d-aa82-5ee97257adc6", "work", "data", { dive: { id: "01a15bb2-5092-7858-90dd-e6c5b1b45254", version: schemaVersion, schema: { type: "object" } } }, seed)];
 	const ctx: Ctx = { cwd: hero, out: (text) => void out.push(text), err: (text) => void err.push(text), stdin: async () => "", capes };
 	const checkout = join(hero, "workspace", "data");
 	return {
@@ -94,6 +94,7 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		checkout,
 		ctx,
 		schemaVersion,
+		schemaRepo: seed,
 		out,
 		err,
 		/** The id of the dive this checkout of the hero holds. */
