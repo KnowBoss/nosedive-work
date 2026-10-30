@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, WORK_ID, heroDoc, isDive, readScopes, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { fixture } from "../test/harness.ts";
 
@@ -20,4 +20,21 @@ test("refuses when this checkout holds no dive, then gives the one it holds, its
 	);
 	assert.equal(diveOnDeck(hero, f.ctx, f.onDeck()).doc.fm.id, f.onDeck());
 	assert.throws(() => diveOnDeck(hero, f.ctx, f.featId), new RegExp(`this checkout of the hero holds no dive ${f.featId}`));
+});
+
+test("work refs change independently of canonical schema versions and foreign dive names stay foreign", async () => {
+	const f = fixture("canonical-scopes");
+	await jump({ ref: f.featId }, f.ctx);
+	const hero = findBridge(f.hero)!;
+	const doc = heroDoc(hero, f.onDeck())!;
+	const owner = WORK_ID;
+	assert.equal(isDive(doc), true);
+	const canonical = { [owner]: { canonical: true, version: f.schemaVersion } };
+	assert.deepEqual((doc.fm.scopes as unknown[]).find((entry) => typeof entry === "object" && entry !== null && owner in entry), canonical);
+	assert.deepEqual(readScopes(doc).map((scope) => scope.repoId), [f.repoId]);
+	const next = scopesWith(hero, doc, new Map([[f.repoId, "new-work-ref"], [hero.id!, "new-hero-ref"]]));
+	assert.deepEqual(next.find((entry) => typeof entry === "object" && entry !== null && owner in entry), canonical);
+	assert.deepEqual(next.find((entry) => typeof entry === "object" && entry !== null && f.repoId in entry), { [f.repoId]: { "work-branch": "work/ideas", ref: "new-work-ref" } });
+	assert.equal(isDive({ ...doc, fm: { ...doc.fm, scopes: [] } }), false, "a hero-owned dive name is not a work dive");
+	assert.equal(isDive({ ...doc, fm: { ...doc.fm, scopes: [{ [f.heroId]: { canonical: true, version: f.schemaVersion } }] } }), false);
 });

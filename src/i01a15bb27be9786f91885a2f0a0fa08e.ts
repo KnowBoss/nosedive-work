@@ -7,8 +7,25 @@ import type { Cape } from "nosedive-core";
 import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
+import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
+
+/** The seeded ids of work and of core, which own the kinds this cape reads. */
+export const WORK_ID = "01a15bb1-da9e-7d2d-aa82-5ee97257adc6";
+const CORE_ID = "01a1336b-c0b8-7cde-b7c6-285196062297";
+
+/** A doc's kind by core's rules, which refuse a bare repo quid in scopes: one is read as an entry with none of its own. */
+function kindOf(doc: Doc): ReturnType<typeof docKind> {
+	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes.map((entry) => (typeof entry === "string" ? { [entry]: {} } : entry)) : doc.fm.scopes;
+	return docKind({ fm: { ...doc.fm, scopes }, path: doc.path });
+}
+
+/** Whether a doc's kind is work's dive, whichever repo holds the doc. */
+export function isDive(doc: Doc): boolean {
+	const kind = kindOf(doc);
+	return kind.owner === WORK_ID && kind.name === "dive";
+}
 
 const LOCAL = /^(?:[^:]*\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.md)?$/;
 /** Ignored files an install or a build remakes, which packs leave out. */
@@ -218,7 +235,7 @@ export function readScopes(doc: Doc, skip?: string): ScopeEntry[] {
 		if (typeof entry === "string") return entry === skip ? [] : [{ repoId: entry }];
 		if (!entry || typeof entry !== "object") return [];
 		return Object.entries(entry as Record<string, Record<string, unknown> | null>)
-			.filter(([repoId]) => repoId !== skip)
+			.filter(([repoId, value]) => repoId !== skip && value?.canonical !== true)
 			.map(([repoId, value]) => ({
 				repoId,
 				branch: typeof value?.["work-branch"] === "string" ? value["work-branch"] : undefined,
@@ -241,12 +258,17 @@ export function heroRef(hero: Hero, doc: Doc): string | undefined {
 export function scopesWith(hero: Hero, doc: Doc, refs: Map<string, string | undefined>): unknown[] {
 	const scopes: unknown[] = readScopes(doc, hero.id).map((entry) => {
 		const ref = refs.has(entry.repoId) ? refs.get(entry.repoId) : entry.ref;
-		if (!entry.branch && !ref) return entry.repoId;
 		return { [entry.repoId]: { ...(entry.branch ? { "work-branch": entry.branch } : {}), ...(ref ? { ref } : {}) } };
 	});
 	const ref = refs.has(hero.id!) ? refs.get(hero.id!) : heroRef(hero, doc);
 	if (ref) scopes.push({ [hero.id!]: { ref } });
-	return scopes;
+	return [...scopes, ...canonicalScopes(doc)];
+}
+
+/** The scopes naming the owner of the doc's kind, which the work loop never rewrites. */
+function canonicalScopes(doc: Doc): unknown[] {
+	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes : [];
+	return scopes.filter((entry) => entry && typeof entry === "object" && Object.values(entry as Record<string, { canonical?: unknown } | null>).some((value) => value?.canonical === true));
 }
 
 /** A doc of the hero itself, in its bridge or any of its decks, never one of its workspace's repos. */
@@ -258,7 +280,8 @@ export function heroDoc(hero: Hero, id: string): Doc | undefined {
 /** The scope's repo doc, which the hero must register. */
 export function repoDoc(hero: Hero, repoId: string): Doc {
 	const repo = heroDoc(hero, repoId);
-	if (repo?.fm.kind !== "repo") throw new Error(`${repoId} is no repo registered in the hero`);
+	const kind = repo && docKind(repo);
+	if (!repo || kind?.owner !== CORE_ID || kind.name !== "repo") throw new Error(`${repoId} is no repo registered in the hero`);
 	return repo;
 }
 
@@ -291,7 +314,9 @@ export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
 export function featTree(hero: Hero): Map<string, { dir: string; parents: string[] }> {
 	const tree = new Map<string, { dir: string; parents: string[] }>();
 	for (const root of hero.roots) {
-		if (heroDoc(hero, root.id)?.fm.kind === "cape") continue;
+		const rootDoc = heroDoc(hero, root.id);
+		const rootKind = rootDoc && kindOf(rootDoc);
+		if (rootKind?.owner === CORE_ID && rootKind.name === "cape") continue;
 		const seen = new Set<string>();
 		const queue = [root.id];
 		while (queue.length > 0) {
@@ -320,14 +345,13 @@ export function featRoot(hero: Hero, id: string): string | undefined {
 export function openDives(hero: Hero): Doc[] {
 	return [...featTree(hero).keys()].flatMap((id) => {
 		const doc = heroDoc(hero, id);
-		return doc?.fm.kind === "dive" && !metaOf(doc).outcome ? [doc] : [];
+		return doc && isDive(doc) && !metaOf(doc).outcome ? [doc] : [];
 	});
 }
 
 /** The dive's first durable feat ancestor, its own feat when none is found. */
 export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
 	const tree = featTree(hero);
-	const dirs = [hero.kbDir, ...hero.roots.map((root) => root.dir)];
 	const queue = [featOf(dive)];
 	const seen = new Set<string>();
 	while (queue.length > 0) {
@@ -335,7 +359,11 @@ export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
 		if (seen.has(id)) continue;
 		seen.add(id);
 		const doc = heroDoc(hero, id);
-		if (doc && findKind(String(doc.fm.kind), dirs, capes, hero)?.durable === true) return id;
+		if (doc) {
+			const kind = kindOf(doc);
+			const spelling = kind.owner === hero.id ? kind.name : `${kind.owner}:${kind.name}`;
+			if (findKind(spelling, hero, capes)?.durable === true) return id;
+		}
 		queue.push(...(tree.get(id)?.parents ?? []));
 	}
 	return featOf(dive);

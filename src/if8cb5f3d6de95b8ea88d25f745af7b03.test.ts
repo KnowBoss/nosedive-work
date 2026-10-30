@@ -135,3 +135,27 @@ test("a feat under a hero's second root gets its dive in that root's directory, 
 	assert.equal(f.onDeck(), id);
 	assert.equal(git(f.hero, "status", "--porcelain"), "");
 });
+
+test("pack, jump and land preserve the canonical version while work refs keep their lease meaning", async () => {
+	const f = fixture("canonical-loop");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const versionLine = `      version: ${f.schemaVersion}`;
+	assert.ok(f.doc(id).includes(versionLine));
+	const commit = f.commit("work.txt", "one\n");
+	await pack({}, f.ctx);
+	assert.ok(f.doc(id).includes(versionLine));
+	assert.match(f.doc(id), new RegExp(`ref: ${commit}`));
+	await jump({ ref: id }, f.ctx);
+	assert.ok(f.doc(id).includes(versionLine));
+	assert.match(f.doc(id), new RegExp(`ref: ${commit}`));
+	await land({}, f.ctx);
+	assert.ok(f.doc(id).includes(versionLine), "land never rewrites a schema version");
+});
+
+test("an unpublished dive schema refuses before jump moves a scope", async () => {
+	const f = fixture("unpublished-dive");
+	(f.ctx.capes[1]!.kinds.dive as { published: boolean }).published = false;
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), /land|push/);
+	assert.equal(existsSync(f.checkout), false);
+});

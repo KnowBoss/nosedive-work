@@ -6,8 +6,9 @@ import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
+import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, wip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, wip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -34,7 +35,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (free.length !== 1) throw new Error(free.length === 0 ? "no dive waits for you here: `nosedive jump <feat or dive>` names one" : `${free.length} dives wait for you, so name one:\n  ${free.map(named).join("\n  ")}`);
 		target = free[0]!;
 	}
-	const isDive = target.fm.kind === "dive";
+	const isDive = isWorkDive(target);
 	let at: string | undefined;
 	if (isDive) {
 		const meta = metaOf(target);
@@ -70,6 +71,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	}
 	if (refused.length > 0) throw new Error(`jump would lose work, so nothing moved:\n  ${refused.join("\n  ")}`);
 
+	if (!isDive) diveKind(hero, ctx); // Refuse an unpublished schema before moving any checkout.
 	const featId = isDive ? featOf(target) : String(target.fm.id);
 	const lines: string[] = [];
 	const moved: Planned[] = [];
@@ -122,11 +124,11 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			const also: string[] = [];
 			if (!isDive) {
 				const feat = heroDoc(hero, String(target.fm.id))!;
-				mintDive(hero, at!, feat, diveId);
+				mintDive(hero, at!, feat, diveId, ctx);
 				also.push(feat.path);
 			}
 			const dive = heroDoc(hero, diveId);
-			if (dive?.fm.kind !== "dive") throw new Error(`${diveId} is no dive in the hero`);
+			if (!dive || !isWorkDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
 			if (diver && diver !== holder) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
 			recordDive(hero, dive, { action: "jump", heading: "Jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also });
@@ -190,9 +192,11 @@ function switchTo(dir: string, local: string, workBranch: string, trunk: string)
 }
 
 /** Mints a dive on a feat, its scopes the feat's, naming its feat and linked from it. */
-function mintDive(hero: Hero, dir: string, feat: Doc, id: string): void {
+function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): void {
 	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
-	const scopes = readScopes(feat).map((entry) => (entry.branch ? { [entry.repoId]: { "work-branch": entry.branch } } : entry.repoId));
+	const scopes: unknown[] = readScopes(feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
+	const kind = diveKind(hero, ctx);
+	if (kind.owner !== hero.id) scopes.push({ [kind.owner]: { canonical: true, version: kind.version } });
 	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
 	const doc = heroDoc(hero, minted.id)!;
 	doc.yaml.set("scopes", scopes);
@@ -200,4 +204,12 @@ function mintDive(hero: Hero, dir: string, feat: Doc, id: string): void {
 	const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
 	feat.yaml.set("links", [...links, { [keyOf(hero, doc)]: { rel: "dives.feat" } }]);
 	writeKbDoc(feat.path, feat.yaml, feat.body);
+}
+
+/** Work's dive kind and the schema commit a dive is minted at, which must be published. */
+function diveKind(hero: Hero, ctx: Ctx) {
+	const kind = findKind(`${WORK_ID}:dive`, hero, ctx.capes);
+	if (!kind) throw new Error("work:dive names no kind here: the hero must wear the work cape");
+	if (!kind.version || !kind.published) throw new Error("the schema of kind work:dive is not on its owner's origin trunk: land or push it first");
+	return kind;
 }
