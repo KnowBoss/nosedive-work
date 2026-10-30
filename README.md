@@ -1,1 +1,1 @@
-# [nosedive-work](kb/01a15bb1-da9e-7d2d-aa82-5ee97257adc6.md)
+# [work](kb/01a15bb1-da9e-7d2d-aa82-5ee97257adc6.md)
