@@ -222,14 +222,21 @@ function same(a: Record<string, Uint8Array>, b: Record<string, Uint8Array>): boo
 	return keys.length === Object.keys(b).length && keys.every((key) => b[key] !== undefined && Buffer.compare(a[key]!, b[key]!) === 0);
 }
 
-/** The scopes a feat or dive names: `- <repo>: { work-branch, ref }`, or a bare repo quid, read-only; the entry keyed by `skip`, the hero's, aside. */
-export function readScopes(doc: Doc, skip?: string): ScopeEntry[] {
+/** Whether the hero registers the doc as a repo (core's repo kind, by place). */
+function isRepo(hero: Hero, id: string): boolean {
+	const doc = heroDoc(hero, id);
+	const kind = doc && docKind(doc);
+	return kind?.owner === CORE_OWNER && kind.name === "repo";
+}
+
+/** The work scopes a feat or dive names: `- <repo>: { work-branch, ref }`, or a bare repo quid, read-only, of a repo the hero registers; any other entry is not work's to read. */
+export function readScopes(hero: Hero, doc: Doc): ScopeEntry[] {
 	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes : [];
 	return scopes.flatMap((entry): ScopeEntry[] => {
-		if (typeof entry === "string") return entry === skip ? [] : [{ repoId: entry }];
+		if (typeof entry === "string") return isRepo(hero, entry) ? [{ repoId: entry }] : [];
 		if (!entry || typeof entry !== "object") return [];
 		return Object.entries(entry as Record<string, Record<string, unknown> | null>)
-			.filter(([repoId, value]) => repoId !== skip && value?.canonical !== true)
+			.filter(([repoId]) => isRepo(hero, repoId))
 			.map(([repoId, value]) => ({
 				repoId,
 				branch: typeof value?.["work-branch"] === "string" ? value["work-branch"] : undefined,
@@ -248,21 +255,29 @@ export function heroRef(hero: Hero, doc: Doc): string | undefined {
 	return undefined;
 }
 
-/** A dive's scopes with each `ref` as given, keyed by repo id, the hero's included; one given none loses it. */
+/** A dive's work scopes with each `ref` as given, keyed by repo id, the hero's included; one given none loses it. Every other entry is carried as parsed. */
 export function scopesWith(hero: Hero, doc: Doc, refs: Map<string, string | undefined>): unknown[] {
-	const scopes: unknown[] = readScopes(doc, hero.id).map((entry) => {
+	const scopes: unknown[] = readScopes(hero, doc).map((entry) => {
 		const ref = refs.has(entry.repoId) ? refs.get(entry.repoId) : entry.ref;
 		return { [entry.repoId]: { ...(entry.branch ? { "work-branch": entry.branch } : {}), ...(ref ? { ref } : {}) } };
 	});
 	const ref = refs.has(hero.id!) ? refs.get(hero.id!) : heroRef(hero, doc);
 	if (ref) scopes.push({ [hero.id!]: { ref } });
-	return [...scopes, ...canonicalScopes(doc)];
+	return [...scopes, ...otherScopes(hero, doc)];
 }
 
-/** The scopes naming the owner of the doc's kind, which the work loop never rewrites. */
-function canonicalScopes(doc: Doc): unknown[] {
+/** The entries that are no work scope, which the work loop never rewrites: canonical and meta entries alike, bar the hero's own ref entry. */
+function otherScopes(hero: Hero, doc: Doc): unknown[] {
 	const scopes = Array.isArray(doc.fm.scopes) ? doc.fm.scopes : [];
-	return scopes.filter((entry) => entry && typeof entry === "object" && Object.values(entry as Record<string, { canonical?: unknown } | null>).some((value) => value?.canonical === true));
+	return scopes.filter((entry) => {
+		if (typeof entry === "string") return !isRepo(hero, entry);
+		if (!entry || typeof entry !== "object") return true;
+		const keys = Object.keys(entry);
+		if (keys.some((key) => isRepo(hero, key))) return false;
+		const value = (entry as Record<string, Record<string, unknown> | null>)[keys[0]!];
+		const heroRef = keys.length === 1 && keys[0] === hero.id && Object.keys(value ?? {}).every((key) => key === "ref");
+		return !heroRef;
+	});
 }
 
 /** A doc of the hero itself, in its bridge or any of its decks, never one of its workspace's repos. */
@@ -376,7 +391,7 @@ export function quiet(ctx: Say) {
 /** A dive's scopes with their checkouts, none hydrated or moved. */
 export function scopesOf(hero: Hero, doc: Doc): Scope[] {
 	const id = String(doc.fm.id);
-	return readScopes(doc, hero.id).map((entry): Scope => {
+	return readScopes(hero, doc).map((entry): Scope => {
 		const repo = repoDoc(hero, entry.repoId);
 		const name = String(repo.fm.name);
 		const dir = checkoutPath(hero, name);

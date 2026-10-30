@@ -53,7 +53,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
 
 	// A checkout already where the dive wants it is the diver's to change; any other must lose nothing by moving.
-	const plan = readScopes(target, hero.id).map((entry): Planned => {
+	const plan = readScopes(hero, target).map((entry): Planned => {
 		const repo = repoDoc(hero, entry.repoId);
 		const name = String(repo.fm.name);
 		const dir = checkoutPath(hero, name);
@@ -195,7 +195,7 @@ function switchTo(dir: string, local: string, workBranch: string, trunk: string)
 /** Mints a dive on a feat, its scopes the feat's, naming its feat and linked from it. */
 function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): void {
 	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
-	const scopes: unknown[] = readScopes(feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
+	const scopes: unknown[] = readScopes(hero, feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
 	const { owner, pin } = diveKind(hero, ctx);
 	if (owner !== hero.id) scopes.push({ [owner]: { canonical: true, ...pin } });
 	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });

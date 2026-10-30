@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
+import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { fixture, git } from "../test/harness.ts";
 
 test("a feat the root reaches gets a dive with its scopes, naming the feat and linked from it as dives.feat, checked out on its branch, held by this checkout, its bookkeeping on trunk", async () => {
@@ -151,6 +152,31 @@ test("pack, jump and land preserve the canonical version while work refs keep th
 	assert.match(f.doc(id), new RegExp(`ref: ${commit}`));
 	await land({}, f.ctx);
 	assert.ok(f.doc(id).includes(versionLine), "land never rewrites a schema version");
+});
+
+test("a meta entry beside the canonical one survives jump, pack and land untouched while work scopes still work", async () => {
+	const f = fixture("meta-scope");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const meta = `  - ${mintUuid()}:\n      version: 0123abc\n      schema: 0123456789ab\n      meta:\n        note: kept\n`;
+	writeFileSync(join(f.hero, "kb", `${id}.md`), f.doc(id).replace("\nscopes:\n", `\nscopes:\n${meta}`));
+	git(f.hero, "commit", "-qam", "meta entry");
+	git(f.hero, "push", "-q", "origin", "HEAD:main");
+	const canonical = `      canonical: true\n      version: ${f.schemaVersion}\n`;
+	const intact = () => {
+		assert.ok(f.doc(id).includes(meta), "the meta entry is carried as it was");
+		assert.ok(f.doc(id).includes(canonical), "the canonical entry is carried as it was");
+	};
+	intact();
+	const commit = f.commit("work.txt", "one\n");
+	await pack({}, f.ctx);
+	intact();
+	assert.match(f.doc(id), new RegExp(`ref: ${commit}`));
+	await jump({ ref: id }, f.ctx);
+	intact();
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), commit);
+	await land({}, f.ctx);
+	intact();
 });
 
 test("an unpublished dive schema refuses before jump moves a scope", async () => {
