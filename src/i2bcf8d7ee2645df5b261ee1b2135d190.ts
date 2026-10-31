@@ -60,7 +60,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "land", heading: "Landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] });
+		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] });
 	});
 
 	const featId = featOf(dive.doc);

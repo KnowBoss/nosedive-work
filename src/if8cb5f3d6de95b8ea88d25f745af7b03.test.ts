@@ -19,7 +19,7 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.match(dive, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`));
 	assert.match(dive, new RegExp(`\\nmeta:\\n {2}feat: ${f.featId}\\n {2}diver: diver@example\\.com#[0-9a-f]{12}\\n`));
 	assert.doesNotMatch(dive, /\nlinks:/, "a dive links nothing back");
-	assert.match(dive, /\n## Jumped \S+\n\ndiver@example\.com picked it up\.\n\n- data: workspace\/data on \w+, working work\/ideas\n$/);
+	assert.match(dive, /\n## \d{4}-\d\d-\d\dT[\d:.]+Z jumped\n\ndiver@example\.com picked it up\.\n\n- data: workspace\/data on \w+, working work\/ideas\n$/);
 	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: dives\\.feat\\n`));
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), `${f.heroId}/main/${id}`);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), trunk, "with no work branch yet, it starts at trunk");

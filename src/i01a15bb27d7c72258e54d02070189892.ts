@@ -9,8 +9,8 @@ export type Doc = NonNullable<ReturnType<typeof findKbDoc>>;
 export type Change = {
 	/** Names the commit: `jump(<dive>): <summary>`. */
 	action: string;
-	/** Names the section: `## <heading> <iso time>`. */
-	heading: string;
+	/** Names the section: `## <iso time> <label>`. */
+	label: string;
 	summary: string;
 	/** Fields of `meta` to set; null clears one. */
 	meta?: Record<string, unknown>;
@@ -29,7 +29,7 @@ export function i01a15bb27d7c72258e54d02070189892(hero: Hero, doc: Doc, change: 
 	const meta = (doc.yaml.toJS() as { meta?: Record<string, unknown> }).meta;
 	if (meta && Object.keys(meta).length === 0) doc.yaml.delete("meta");
 	if (change.scopes) doc.yaml.set("scopes", change.scopes);
-	const body = `${doc.body.replace(/\n*$/, "\n")}\n## ${change.heading} ${new Date().toISOString()}\n\n${change.lines.join("\n")}\n`;
+	const body = `${doc.body.replace(/\n*$/, "\n")}\n## ${new Date().toISOString()} ${change.label}\n\n${change.lines.join("\n")}\n`;
 	writeKbDoc(doc.path, doc.yaml, body);
 	doc.body = body;
 	commitFiles(hero.dir, [doc.path, ...(change.also ?? [])], `${change.action}(${String(doc.fm.name)}): ${change.summary}`);

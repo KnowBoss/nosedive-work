@@ -36,7 +36,7 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	const doc = f.doc(id);
 	assert.match(doc, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n {6}ref: ${tip}\\n`));
 	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}packer: diver@example\.com\n/);
-	assert.match(doc, new RegExp(`\\n## Packed \\S+\\n\\ndiver@example\\.com put it down\\.\\n\\n- data: 2 commits kept on ${ref} at \\w+\\n- hero: no work\\n$`));
+	assert.match(doc, new RegExp(`\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z packed\\n\\ndiver@example\\.com put it down\\.\\n\\n- data: 2 commits kept on ${ref} at \\w+\\n- hero: no work\\n$`));
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], "the record is on trunk");
 
 	await jump({ ref: id }, f.ctx);

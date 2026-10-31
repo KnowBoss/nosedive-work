@@ -132,7 +132,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			if (!dive || !isWorkDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
 			if (diver && diver !== holder) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
-			recordDive(hero, dive, { action: "jump", heading: "Jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also });
+			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also });
 			const bookkeeping = runGit(hero.dir, "rev-parse", "HEAD").text;
 			if (heroPacked) {
 				const base = runGit(hero.dir, "merge-base", heroPacked, `refs/remotes/origin/${trunk}`).text;

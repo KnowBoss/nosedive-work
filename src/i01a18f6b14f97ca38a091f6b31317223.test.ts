@@ -71,7 +71,7 @@ test("pass --turn appends two turns in invocation order", async () => {
 	assert.equal(await f.run(["First turn", "--label", "First"]), 0, f.err.join("\n"));
 	assert.equal(await f.run(["Second turn", "--label", "Second"]), 0, f.err.join("\n"));
 	const text = f.doc(f.id);
-	assert.equal((text.match(/^## \d{4}-/gm) ?? []).length, 2);
+	assert.equal((text.match(/^## \d{4}-\S+ (First|Second)$/gm) ?? []).length, 2);
 	assert.ok(text.indexOf("First turn") < text.indexOf("Second turn"));
 	assert.match(text, /First\n\nFirst turn[\s\S]*Second\n\nSecond turn\n$/);
 });

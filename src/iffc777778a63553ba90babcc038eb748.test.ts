@@ -23,7 +23,7 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 	const doc = f.doc(id);
 	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}outcome: bailed\n/);
-	assert.match(doc, new RegExp(`\\n## Bailed \\S+\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md; \\w+ pack\\(ideas\\.${id.slice(-6)}\\): work in progress, kept on ${ref}\\n- hero: held no commits\\n$`));
+	assert.match(doc, new RegExp(`\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z bailed\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md; \\w+ pack\\(ideas\\.${id.slice(-6)}\\): work in progress, kept on ${ref}\\n- hero: held no commits\\n$`));
 	assert.throws(() => f.onDeck());
 	await assert.rejects(jump({ ref: id }, f.ctx), /is over: it bailed/);
 });

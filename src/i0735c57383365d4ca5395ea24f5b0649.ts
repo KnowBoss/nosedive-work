@@ -16,7 +16,7 @@ export async function i0735c57383365d4ca5395ea24f5b0649(args: Args, ctx: Ctx): P
 	const id = String(dive.doc.fm.id);
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "pack", heading: "Packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, doc, refs), lines: [`${me} put it down.`, "", ...lines] });
+		recordDive(hero, doc, { action: "pack", label: "packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, doc, refs), lines: [`${me} put it down.`, "", ...lines] });
 	});
 	ctx.out(`packed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }
