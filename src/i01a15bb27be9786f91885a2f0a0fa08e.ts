@@ -7,7 +7,7 @@ import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core"
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
-import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor } from "nosedive-core";
+import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
 import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -21,7 +21,6 @@ export function isDive(doc: Doc): boolean {
 	return kind.owner === WORK_ID && kind.name === "dive";
 }
 
-const LOCAL = /^(?:[^:]*\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.md)?$/;
 /** Ignored files an install or a build remakes, which packs leave out. */
 const REBUILDABLE = /(^|\/)(node_modules|dist|build)\//;
 
@@ -75,12 +74,13 @@ export function diveRef(hero: Hero, diveId: string): string {
 
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
 export function wip(hero: Hero, dive: Doc): string {
-	return subjectLine(featName(hero, dive), "pack", "work in progress");
+	return subjectLine(featName(hero, dive), "pack", `work in progress on ${String(dive.fm.name)}`);
 }
 
-/** Whether a commit's subject is a dive's work in progress, as pack names it now or named it before feats grouped commits. */
-export function isWip(hero: Hero, dive: Doc, subject: string): boolean {
-	return subject === wip(hero, dive) || subject === `pack(${String(dive.fm.name)}): work in progress`;
+/** Whether a commit's subject is this dive's work in progress, as pack names it now, whatever the feat's name, or named it before feats grouped commits; another dive's is not. */
+export function isWip(dive: Doc, subject: string): boolean {
+	const name = String(dive.fm.name);
+	return subject === `pack(${name}): work in progress` || /^(?:feat\([^)]*\): pack |pack: )work in progress on (.*)$/.exec(subject)?.[1] === name;
 }
 
 /** The name of a dive's feat, which groups the commits of its loop; nothing when the hero does not hold the feat. */
@@ -319,56 +319,9 @@ export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: 
 	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome) };
 }
 
-/** The ids a doc links within its own repo, with each link's rel; a link naming another repo (<repo>:<id>) is left out. */
-export function linkedIds(doc: Doc): { id: string; rel: unknown }[] {
-	return (Array.isArray(doc.fm.links) ? doc.fm.links : []).flatMap((link) =>
-		Object.entries((link ?? {}) as Record<string, { rel?: unknown } | null>).flatMap(([key, value]) => {
-			const id = LOCAL.exec(key)?.[1];
-			return id ? [{ id, rel: value?.rel }] : [];
-		}),
-	);
-}
-
-/**
- * Every feat the hero's roots reach through links whose rel ends .feat, with the directory of the root that reaches it
- * and the docs that link it so; a cape root's feats are its actions, not work.
- */
-export function featTree(hero: Hero): Map<string, { dir: string; parents: string[] }> {
-	const tree = new Map<string, { dir: string; parents: string[] }>();
-	for (const root of hero.roots) {
-		const rootDoc = heroDoc(hero, root.id);
-		const rootKind = rootDoc && docKind(rootDoc);
-		if (rootKind?.owner === CORE_OWNER && rootKind.name === "cape") continue;
-		const seen = new Set<string>();
-		const queue = [root.id];
-		while (queue.length > 0) {
-			const at = queue.shift()!;
-			if (seen.has(at)) continue;
-			seen.add(at);
-			const doc = heroDoc(hero, at);
-			for (const link of doc ? linkedIds(doc) : []) {
-				if (typeof link.rel !== "string" || !link.rel.endsWith(".feat") || link.rel === "parent.feat") continue;
-				const node = tree.get(link.id) ?? { dir: root.dir, parents: [] };
-				node.parents.push(at);
-				tree.set(link.id, node);
-				queue.push(link.id);
-			}
-		}
-	}
-	return tree;
-}
-
-/** The directory of the root that reaches a feat, which is what makes it one. */
-export function featRoot(hero: Hero, id: string): string | undefined {
-	return featTree(hero).get(id)?.dir;
-}
-
-/** Every dive the hero's feats reach that is not over. */
+/** Every dive of work's kind that core's feat-tree finds open. */
 export function openDives(hero: Hero): Doc[] {
-	return [...featTree(hero).keys()].flatMap((id) => {
-		const doc = heroDoc(hero, id);
-		return doc && isDive(doc) && !metaOf(doc).outcome ? [doc] : [];
-	});
+	return coreOpenDives(hero).filter(isDive);
 }
 
 /** The dive's first durable feat ancestor, its own feat when none is found. */

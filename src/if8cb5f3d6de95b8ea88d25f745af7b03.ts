@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { relative } from "node:path";
+import { featRoot } from "nosedive-core";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
@@ -9,7 +10,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, isDive as isWorkDive, emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -162,7 +163,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (orphaned) ctx.out(`${scope.name}: ignored files from other work kept in ${relative(hero.dir, orphaned).replace(/\\/g, "/")}`);
 	}
 	for (const dir of [hero.dir, ...plan.map((scope) => scope.dir)]) {
-		if (isWip(hero, dive, runGit(dir, "log", "-1", "--format=%s").text)) runGit(dir, "reset", "-q", "--mixed", "HEAD^");
+		if (isWip(dive, runGit(dir, "log", "-1", "--format=%s").text)) runGit(dir, "reset", "-q", "--mixed", "HEAD^");
 	}
 
 	const shown = (path: string) => relative(ctx.cwd, path).replace(/\\/g, "/");
