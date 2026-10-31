@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
 import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
+import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
@@ -164,11 +165,22 @@ export function stamp(dir: string, range: string[], trailers: string[]): number 
 	return shas.length;
 }
 
-/** The ignored files a pack keeps: all but those an install or a build remakes. */
-function keepable(dir: string): string[] {
+/** The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace. */
+function keepable(hero: Hero, dir: string): string[] {
+	const isSpared = spared(hero, dir);
 	return runGit(dir, "ls-files", "--others", "--ignored", "--exclude-standard")
 		.text.split("\n")
-		.filter((file) => file && !REBUILDABLE.test(file));
+		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file));
+}
+
+/** Whether a path in a checkout lies under a workspace it holds, its repo's own or the hero's, which jump and pack never touch. */
+function spared(hero: Hero, dir: string): (path: string) => boolean {
+	const inside = [readRepoConfig(dir)?.workspace, hero.workspace].flatMap((workspace) => {
+		if (!workspace) return [];
+		const path = relative(dir, workspace).replace(/\\/g, "/");
+		return path.startsWith("..") || isAbsolute(path) ? [] : [path ? `${path}/` : ""];
+	});
+	return (path) => inside.some((prefix) => path.startsWith(prefix));
 }
 
 function packsDir(hero: Hero): string {
@@ -182,7 +194,7 @@ function read(dir: string, files: string[]): Record<string, Uint8Array> {
 /** Zips a scope's keepable ignored files to its feat's pack, replacing it, or deleting it when there are none; returns how many. */
 export function packIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }): number {
 	const path = join(packsDir(hero), featId, `${scope.name}.zip`);
-	const files = existsSync(scope.dir) ? keepable(scope.dir) : [];
+	const files = existsSync(scope.dir) ? keepable(hero, scope.dir) : [];
 	if (files.length === 0) {
 		rmSync(path, { force: true });
 		return 0;
@@ -197,7 +209,7 @@ export function packIgnored(hero: Hero, featId: string, scope: { name: string; d
  * zipped to an orphan pack first, whose path it returns.
  */
 export function swapIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }): string | undefined {
-	const files = keepable(scope.dir);
+	const files = keepable(hero, scope.dir);
 	let orphaned: string | undefined;
 	if (files.length > 0) {
 		const current = read(scope.dir, files);
@@ -457,7 +469,8 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, featOf(dive.doc), scope);
 	for (const scope of writable) {
 		const base = runGit(scope.dir, "merge-base", "HEAD", baseOf(scope)).text || baseOf(scope);
-		const ignored = runGit(scope.dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").text.split("\n").filter(Boolean);
+		const isSpared = spared(hero, scope.dir);
+		const ignored = runGit(scope.dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").text.split("\n").filter((path) => path && !isSpared(path));
 		runGit(scope.dir, "checkout", "-q", "--detach", base);
 		// What the base does not ignore would read as untracked work; the feat's pack holds what is worth keeping.
 		if (ignored.length > 0) runGit(scope.dir, "clean", "-q", "-f", "-d", "--", ...ignored);

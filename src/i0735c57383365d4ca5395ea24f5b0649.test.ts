@@ -47,6 +47,28 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	assert.doesNotMatch(f.doc(id), /packer:/);
 });
 
+test("never packs or clears a workspace the checkout's own config names, nor the checkouts in it", async () => {
+	const f = fixture("pack-workspace");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	mkdirSync(join(f.checkout, ".nosedive"));
+	f.commit(".nosedive/config.yaml", "workspace: ./workspace\n");
+	mkdirSync(join(f.checkout, "workspace", "nested"), { recursive: true });
+	writeFileSync(join(f.checkout, "workspace", ".gitignore"), "*\n");
+	writeFileSync(join(f.checkout, "workspace", "notes.md"), "kept\n");
+	git(join(f.checkout, "workspace", "nested"), "init", "-q");
+	writeFileSync(join(f.checkout, "workspace", "nested", "work.md"), "a nested checkout's work\n");
+
+	await pack({}, f.ctx);
+	assert.equal(readFileSync(join(f.checkout, "workspace", "notes.md"), "utf8"), "kept\n", "kept in place, not packed");
+	assert.equal(readFileSync(join(f.checkout, "workspace", "nested", "work.md"), "utf8"), "a nested checkout's work\n");
+	assert.equal(existsSync(join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip")), false, "nothing was packed");
+
+	await jump({ ref: id }, f.ctx);
+	assert.equal(readFileSync(join(f.checkout, "workspace", "notes.md"), "utf8"), "kept\n", "and jump leaves it alone");
+	assert.equal(existsSync(join(f.checkout, "workspace", "nested", ".git")), true);
+});
+
 test("refuses when the dive's ref moved since it was jumped, pushing nothing", async () => {
 	const f = fixture("pack-lease");
 	await jump({ ref: f.featId }, f.ctx);
