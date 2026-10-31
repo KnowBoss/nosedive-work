@@ -9,7 +9,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, isDive as isWorkDive, emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, wip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, featRoot, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -132,7 +132,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			if (!dive || !isWorkDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
 			if (diver && diver !== holder) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
-			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also });
+			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
 			const bookkeeping = runGit(hero.dir, "rev-parse", "HEAD").text;
 			if (heroPacked) {
 				const base = runGit(hero.dir, "merge-base", heroPacked, `refs/remotes/origin/${trunk}`).text;
@@ -162,7 +162,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (orphaned) ctx.out(`${scope.name}: ignored files from other work kept in ${relative(hero.dir, orphaned).replace(/\\/g, "/")}`);
 	}
 	for (const dir of [hero.dir, ...plan.map((scope) => scope.dir)]) {
-		if (runGit(dir, "log", "-1", "--format=%s").text === wip(dive)) runGit(dir, "reset", "-q", "--mixed", "HEAD^");
+		if (isWip(hero, dive, runGit(dir, "log", "-1", "--format=%s").text)) runGit(dir, "reset", "-q", "--mixed", "HEAD^");
 	}
 
 	const shown = (path: string) => relative(ctx.cwd, path).replace(/\\/g, "/");

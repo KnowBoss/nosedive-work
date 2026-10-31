@@ -19,11 +19,14 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	await bail({ why: "a better idea came along" }, f.ctx);
 	const ref = `refs/nosedive/dives/${f.heroId}/main/${id}`;
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
-	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), `pack(ideas.${id.slice(-6)}): work in progress`, "nothing it held is lost");
+	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), "feat(ideas): pack work in progress", "nothing it held is lost");
+	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:only,unfold)", ref), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "and says nosedive made it, once");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "feat(ideas): bail a better idea came along");
+	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), "Co-Authored-By: nosedive test <noreply@nosedive.dev>");
 	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 	const doc = f.doc(id);
 	assert.match(doc, /\nmeta:\n {2}feat: [0-9a-f-]{36}\n {2}outcome: bailed\n/);
-	assert.match(doc, new RegExp(`\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z bailed\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md; \\w+ pack\\(ideas\\.${id.slice(-6)}\\): work in progress, kept on ${ref}\\n- hero: held no commits\\n$`));
+	assert.match(doc, new RegExp(`\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z bailed\\n\\ndiver@example\\.com bailed: a better idea came along\\n\\n- data: held ${short} add idea\\.md; \\w+ feat\\(ideas\\): pack work in progress, kept on ${ref}\\n- hero: held no commits\\n$`));
 	assert.throws(() => f.onDeck());
 	await assert.rejects(jump({ ref: id }, f.ctx), /is over: it bailed/);
 });

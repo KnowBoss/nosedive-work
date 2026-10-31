@@ -9,23 +9,36 @@ import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { fixture, git } from "../test/harness.ts";
 
+const nosedive = "Co-Authored-By: nosedive test <noreply@nosedive.dev>";
+
 test("stamps and pushes the work to its feat's branch and the hero's to trunk, deletes the dive's refs and branch, leaves the checkout detached, and ends the dive", async () => {
 	const f = fixture("land");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
+	for (const [file, trailer] of [["old.md", "Co-Authored-By: nosedive 0.0.1 <noreply@nosedive.dev>"], ["ann.md", "Co-Authored-By: Ann <ann@example.com>"]]) {
+		writeFileSync(join(f.checkout, file), "x\n");
+		git(f.checkout, "add", "-A");
+		git(f.checkout, "commit", "-q", "-m", `add ${file}\n\n${trailer}`);
+	}
 	f.commit("idea.md", "an idea\n");
 	const author = git(f.checkout, "log", "-1", "--format=%an %ae %aI");
 	writeFileSync(join(f.hero, "kb", "note.md"), "a note\n");
 	git(f.hero, "add", "-A");
 	git(f.hero, "commit", "-q", "-m", "a note");
 	await pack({}, f.ctx);
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "feat(ideas): pack diver@example.com put it down");
+	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive, "pack's record says nosedive made it");
 	await jump({ ref: id }, f.ctx);
 
 	await land({}, f.ctx);
 	const head = git(f.checkout, "rev-parse", "HEAD");
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), head);
-	const trailers = `Nosedive-Dive: ${id}\nNosedive-Feat: ${f.featId}`;
+	const trailers = `Nosedive-Dive: ${id}\nNosedive-Feat: ${f.featId}\n${nosedive}`;
 	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)"), trailers);
+	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD~2"), `Co-Authored-By: nosedive 0.0.1 <noreply@nosedive.dev>\nNosedive-Dive: ${id}\nNosedive-Feat: ${f.featId}`, "a commit that has a nosedive co-author gets no second");
+	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD~1"), `Co-Authored-By: Ann <ann@example.com>\n${trailers}`, "another's does not stand in for it");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "feat(ideas): land diver@example.com landed it");
+	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive);
 	assert.equal(git(f.checkout, "log", "-1", "--format=%s"), "add idea.md");
 	assert.equal(git(f.checkout, "log", "-1", "--format=%an %ae %aI"), author, "the same author");
 	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive/dives"), "", "the dive's ref is gone");

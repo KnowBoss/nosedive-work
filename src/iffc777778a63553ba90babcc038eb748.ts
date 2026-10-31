@@ -11,12 +11,12 @@ export async function iffc777778a63553ba90babcc038eb748(args: Args, ctx: Ctx): P
 	const dive = diveOnDeck(hero, ctx, typeof args.dive === "string" ? args.dive : undefined);
 	const me = emailOf(hero);
 
-	const { puts, refs, own } = putDown(dive);
+	const { puts, refs, own } = putDown(dive, ctx.capes[0]!.version);
 	const lines = [`${me} bailed: ${reason}`, "", ...puts.map((put) => `- ${put.name}: ${put.sha ? `held ${[...put.commits].reverse().join("; ")}, kept on ${own}` : "held no commits"}`)];
 	const id = String(dive.doc.fm.id);
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "bail", label: "bailed", summary: reason, meta: { diver: null, outcome: "bailed" }, scopes: scopesWith(hero, doc, refs), lines });
+		recordDive(hero, doc, { action: "bail", label: "bailed", summary: reason, meta: { diver: null, outcome: "bailed" }, scopes: scopesWith(hero, doc, refs), lines }, ctx.capes[0]!.version);
 	});
 	ctx.out(`bailed ${String(dive.doc.fm.name)}`);
 }

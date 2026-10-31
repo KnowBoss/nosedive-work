@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
+import { coAuthor } from "nosedive-core";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, heroDoc, heroTrunk, localBranch, packIgnored, pushTrunk, readOnlyRefusals, scopesWith, stamp } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -29,7 +30,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	}
 	if (refused.length > 0) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
 
-	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`];
+	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
 	const lines: string[] = [];
 	for (const scope of writable) {
 		const base = published.get(scope.name) ?? `refs/remotes/origin/${scope.trunk}`;
@@ -60,7 +61,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
-		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] });
+		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
 	});
 
 	const featId = featOf(dive.doc);

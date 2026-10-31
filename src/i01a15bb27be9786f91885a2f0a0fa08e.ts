@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
@@ -8,7 +7,8 @@ import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core"
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
-import { CORE_OWNER } from "nosedive-core";
+import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor } from "nosedive-core";
+import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -46,11 +46,11 @@ export function heroBranch(hero: Hero): string {
 	return on.text;
 }
 
-/** Who holds a dive from this checkout of the hero: `<email>#<holder token>`. */
+/** Who holds a dive from this checkout of the hero: `<email>#<holder token>`, which core's commit-subject reads to find the held dive's feat. */
 export function holderOf(hero: Hero): string {
-	const email = emailOf(hero);
-	const top = runGit(hero.dir, "rev-parse", "--show-toplevel").text;
-	return `${email}#${createHash("sha256").update(`${top}/${heroBranch(hero)}/${email}`).digest("hex").slice(0, 12)}`;
+	emailOf(hero);
+	heroBranch(hero);
+	return holderToken(hero.dir)!;
 }
 
 /** The hero's trunk: the branch origin's HEAD named when last fetched. */
@@ -74,8 +74,19 @@ export function diveRef(hero: Hero, diveId: string): string {
 }
 
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
-export function wip(dive: Doc): string {
-	return `pack(${String(dive.fm.name)}): work in progress`;
+export function wip(hero: Hero, dive: Doc): string {
+	return subjectLine(featName(hero, dive), "pack", "work in progress");
+}
+
+/** Whether a commit's subject is a dive's work in progress, as pack names it now or named it before feats grouped commits. */
+export function isWip(hero: Hero, dive: Doc, subject: string): boolean {
+	return subject === wip(hero, dive) || subject === `pack(${String(dive.fm.name)}): work in progress`;
+}
+
+/** The name of a dive's feat, which groups the commits of its loop; nothing when the hero does not hold the feat. */
+export function featName(hero: Hero, dive: Doc): string | undefined {
+	const name = heroDoc(hero, featOf(dive))?.fm.name;
+	return name === undefined ? undefined : String(name);
 }
 
 /** Every ref of the dive on origin, pushed from any hero, newest first, as last fetched. */
@@ -138,7 +149,9 @@ export function stamp(dir: string, range: string[], trailers: string[]): number 
 	for (const sha of shas) {
 		const [an, ae, ad, cn, ce, cd, parents, tree] = runGit(dir, "log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%P%x00%T", sha).text.split("\0") as string[];
 		const message = spawnSync("git", ["log", "-1", "--format=%B", sha], { cwd: dir, encoding: "utf8" }).stdout;
-		const args = ["interpret-trailers", "--if-exists", "doNothing", ...trailers.flatMap((trailer) => ["--trailer", trailer])];
+		// A trailer already there is left alone, except that a co-author is told by its value: another's does not stand in for nosedive's.
+		const given = trailers.flatMap((trailer) => (isCoAuthor(trailer) ? (hasCoAuthor(message) ? [] : ["--if-exists", "add", "--trailer", trailer]) : ["--if-exists", "doNothing", "--trailer", trailer]));
+		const args = ["interpret-trailers", ...given];
 		const stamped = spawnSync("git", args, { cwd: dir, encoding: "utf8", input: message }).stdout;
 		const env = { ...process.env, GIT_AUTHOR_NAME: an, GIT_AUTHOR_EMAIL: ae, GIT_AUTHOR_DATE: ad, GIT_COMMITTER_NAME: cn, GIT_COMMITTER_EMAIL: ce, GIT_COMMITTER_DATE: cd };
 		const parentArgs = (parents ?? "").split(" ").filter(Boolean).flatMap((parent) => ["-p", made.get(parent) ?? parent]);
@@ -443,7 +456,7 @@ type Put = { key: string; name: string; dir: string; base: string; recorded: str
  * lease against what the dive last saw, checkouts left detached at their base, the hero reset to trunk. Returns each
  * repo's commits and the ref values to record.
  */
-export function putDown(dive: Dive): { puts: Put[]; refs: Map<string, string | undefined>; own: string } {
+export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<string, string | undefined>; own: string } {
 	const { hero } = dive;
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
@@ -467,7 +480,7 @@ export function putDown(dive: Dive): { puts: Put[]; refs: Map<string, string | u
 	for (const put of puts) {
 		if (runGit(put.dir, "status", "--porcelain").text) {
 			runGit(put.dir, "add", "-A");
-			const committed = runGit(put.dir, "commit", "-q", "-m", wip(dive.doc));
+			const committed = runGit(put.dir, "commit", "-q", "-m", commitMessage(wip(hero, dive.doc), version));
 			if (!committed.ok) throw new Error(`cannot commit ${put.name}'s uncommitted work: ${committed.text}`);
 		}
 		put.commits = runGit(put.dir, "log", "--format=%h %s", put.base + "..HEAD").text.split("\n").filter(Boolean);
