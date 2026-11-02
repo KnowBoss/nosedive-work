@@ -17,7 +17,7 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	writeFileSync(join(f.checkout, "draft.md"), "half\n");
 
 	await bail({ why: "a better idea came along" }, f.ctx);
-	const ref = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
 	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), `feat(ideas): pack work in progress on ideas.${id.slice(-6)}`, "nothing it held is lost");
 	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:only,unfold)", ref), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "and says nosedive made it, once");

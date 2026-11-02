@@ -120,10 +120,10 @@ test("moves a checkout left from other work, keeping commits origin lacks on an 
 
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
-	assert.equal(f.remoteRef(`refs/nosedive/orphans/${f.heroId}/main/${stray}`), stray);
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/orphans/${stray}`), stray);
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), `${f.heroId}/main/${id}`);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.remoteRef("refs/heads/work/ideas"), "a feat's dives stack on its work branch");
-	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept on refs/nosedive/orphans/${f.heroId}/main/${stray}\\n$`));
+	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept on refs/nosedive/${f.heroId}/orphans/${stray}\\n$`));
 });
 
 test("a feat under a hero's second root gets its dive in that root's directory, and packs and jumps again", async () => {

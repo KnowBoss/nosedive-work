@@ -22,7 +22,7 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	writeFileSync(join(f.checkout, "node_modules", "dep.js"), "remade by an install\n");
 
 	await pack({}, f.ctx);
-	const ref = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
 	const tip = f.remoteRef(ref);
 	assert.equal(f.remoteRef(`${ref}^`), committed, "the ref holds the commit, then the uncommitted work");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base, "the checkout sits at its base");
@@ -79,8 +79,48 @@ test("refuses when the dive's ref moved since it was jumped, pushing nothing", a
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", "theirs");
 	git(other, "push", "-q", "origin", `HEAD:refs/nosedive/dives/elsewhere/main/${id}`);
 	await assert.rejects(pack({}, f.ctx), new RegExp(`the dive's refs moved under it, so nothing was put down:\\n {2}data: refs/nosedive/dives/elsewhere/main/${id} is at \\w{7}, which this dive did not see`));
-	assert.equal(f.remoteRef(`refs/nosedive/dives/${f.heroId}/main/${id}`), "", "nothing pushed");
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), "", "nothing pushed");
 	assert.equal(f.onDeck(), id, "still held");
+});
+
+test("a dive packed from one checkout of the hero is jumped from another with its work, and keeps one ref", async () => {
+	const f = fixture("pack-shared");
+	const other = join(f.hero, "..", "other-checkout");
+	git(f.hero, "worktree", "add", "-q", "-b", "other", other, "HEAD");
+	await jump({ ref: f.featId }, { ...f.ctx, cwd: other });
+	const theirs = join(other, "workspace", "data");
+	writeFileSync(join(theirs, "idea.md"), "theirs\n");
+	git(theirs, "add", "-A");
+	git(theirs, "commit", "-q", "-m", "add idea.md");
+	const committed = git(theirs, "rev-parse", "HEAD");
+	await pack({}, { ...f.ctx, cwd: other });
+	const ref = git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive");
+	assert.match(ref, new RegExp(`^refs/nosedive/${f.heroId}/dives/[0-9a-f-]{36}$`), "no branch in its name");
+
+	git(f.hero, "pull", "-q", "--ff-only");
+	await jump({ ref: ref.split("/").pop() }, f.ctx);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), committed, "the other checkout's work is here");
+	const mine = f.commit("more.md", "mine\n");
+	await pack({}, f.ctx);
+	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname) %(objectname)", "refs/nosedive"), `${ref} ${mine}`, "one ref, whichever checkout packed it");
+});
+
+test("a dive's ref under the name before hero-dive-refs is jumped, and its next pack replaces it", async () => {
+	const f = fixture("pack-old-ref");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const committed = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const old = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", old, committed);
+	git(f.remote, "update-ref", "-d", ref);
+
+	await jump({ ref: id }, f.ctx);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), committed);
+	const mine = f.commit("more.md", "more\n");
+	await pack({}, f.ctx);
+	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname) %(objectname)", "refs/nosedive"), `${ref} ${mine}`);
 });
 
 test("refuses work in a read-only scope", async () => {

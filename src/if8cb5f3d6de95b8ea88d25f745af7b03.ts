@@ -175,7 +175,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 
 /** The dive's newest ref in a repo, as last fetched. */
 function newestRef(dir: string, diveId: string): string | undefined {
-	const ref = runGit(dir, "for-each-ref", "--sort=-committerdate", "--format=%(objectname) %(refname)", "refs/nosedive/dives")
+	const ref = runGit(dir, "for-each-ref", "--sort=-committerdate", "--format=%(objectname) %(refname)", "refs/nosedive")
 		.text.split("\n")
 		.find((line) => line.endsWith(`/${diveId}`));
 	return ref?.split(" ")[0];

@@ -39,7 +39,7 @@ export function emailOf(hero: Hero): string {
 	return email;
 }
 
-/** The hero checkout's branch, which names a dive's local branch and its refs. */
+/** The hero checkout's branch, which names a dive's local branch. */
 export function heroBranch(hero: Hero): string {
 	const on = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD");
 	if (!on.ok) throw new Error("the hero is detached, so a dive's work has no branch to be named after: put the hero on a branch first");
@@ -68,9 +68,9 @@ export function localBranch(hero: Hero, diveId: string): string {
 	return `${hero.id}/${heroBranch(hero)}/${diveId}`;
 }
 
-/** Where a dive's work from this hero checkout is kept on each repo's origin. */
+/** Where a dive's work is kept on each repo's origin, whichever checkout of the hero packs it. */
 export function diveRef(hero: Hero, diveId: string): string {
-	return `refs/nosedive/dives/${localBranch(hero, diveId)}`;
+	return `refs/nosedive/${hero.id}/dives/${diveId}`;
 }
 
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
@@ -90,9 +90,9 @@ export function featName(hero: Hero, dive: Doc): string | undefined {
 	return name === undefined ? undefined : String(name);
 }
 
-/** Every ref of the dive on origin, pushed from any hero, newest first, as last fetched. */
+/** Every ref of the dive on origin, under any name it was pushed to, newest first, as last fetched. */
 export function diveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
-	return runGit(dir, "ls-remote", "origin", "refs/nosedive/dives/*")
+	return runGit(dir, "ls-remote", "origin", "refs/nosedive/*")
 		.text.split("\n")
 		.filter(Boolean)
 		.map((line) => {
@@ -120,7 +120,7 @@ export function unpushed(dir: string): string[] {
 export function orphan(hero: Hero, dir: string): { ref: string; commits: string[] } | undefined {
 	const commits = unpushed(dir);
 	if (commits.length === 0) return undefined;
-	const ref = `refs/nosedive/orphans/${hero.id}/${heroBranch(hero)}/${runGit(dir, "rev-parse", "HEAD").text}`;
+	const ref = `refs/nosedive/${hero.id}/orphans/${runGit(dir, "rev-parse", "HEAD").text}`;
 	const pushed = runGit(dir, "push", "-q", "origin", `HEAD:${ref}`);
 	if (!pushed.ok) throw new Error(`cannot push ${dir}'s commits to ${ref}: ${pushed.text}`);
 	runGit(dir, "update-ref", ref, "HEAD");
