@@ -21,6 +21,12 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	if (!hero?.workspace) throw new Error("jump works in a hero repo, and this is not one: `nosedive seed` makes one");
 	const me = emailOf(hero);
 	const holder = holderOf(hero);
+	// A dive minted or packed from another checkout of the hero is on origin's trunk, not yet here.
+	const trunk = heroTrunk(hero);
+	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
+	if (!runGit(hero.dir, "status", "--porcelain").text && runGit(hero.dir, "merge-base", "--is-ancestor", "HEAD", `refs/remotes/origin/${trunk}`).ok) {
+		runGit(hero.dir, "merge", "-q", "--ff-only", `refs/remotes/origin/${trunk}`);
+	}
 	const open = openDives(hero);
 	const held = open.filter((doc) => metaOf(doc).diver === holder);
 	const named = (doc: Doc) => `${String(doc.fm.name)} (${String(doc.fm.id)})`;
@@ -63,10 +69,8 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		const settled = local ? on?.text === local : on !== undefined && !on.ok && again;
 		return { ...entry, repo, name, dir, shown: relative(hero.dir, dir).replace(/\\/g, "/"), local, settled };
 	});
-	const trunk = heroTrunk(hero);
 	const refused = plan.filter((scope) => existsSync(scope.dir) && !scope.settled && runGit(scope.dir, "status", "--porcelain").text).map((scope) => `${scope.shown} has uncommitted changes or untracked files`);
 	if (!again) {
-		runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
 		if (runGit(hero.dir, "status", "--porcelain").text) refused.unshift("the hero has uncommitted changes");
 		const ahead = runGit(hero.dir, "rev-list", "--count", `refs/remotes/origin/${trunk}..HEAD`).text;
 		if (ahead !== "0") refused.unshift(`the hero holds ${ahead} commit${ahead === "1" ? "" : "s"} ${trunk} lacks`);

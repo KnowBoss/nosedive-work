@@ -97,7 +97,6 @@ test("a dive packed from one checkout of the hero is jumped from another with it
 	const ref = git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive");
 	assert.match(ref, new RegExp(`^refs/nosedive/${f.heroId}/dives/[0-9a-f-]{36}$`), "no branch in its name");
 
-	git(f.hero, "pull", "-q", "--ff-only");
 	await jump({ ref: ref.split("/").pop() }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), committed, "the other checkout's work is here");
 	const mine = f.commit("more.md", "mine\n");
