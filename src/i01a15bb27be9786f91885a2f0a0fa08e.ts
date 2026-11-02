@@ -90,6 +90,11 @@ export function featName(hero: Hero, dive: Doc): string | undefined {
 	return name === undefined ? undefined : String(name);
 }
 
+/** Whether a ref holds the dive's work, under its name now or before hero-dive-refs: a `dives` segment, the dive's id last. */
+export function isDiveRef(ref: string, diveId: string): boolean {
+	return ref.includes("/dives/") && ref.endsWith(`/${diveId}`);
+}
+
 /** Every ref of the dive on origin, under any name it was pushed to, newest first, as last fetched. */
 export function diveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
 	return runGit(dir, "ls-remote", "origin", "refs/nosedive/*")
@@ -99,7 +104,7 @@ export function diveRefs(dir: string, diveId: string): { ref: string; sha: strin
 			const [sha, ref] = line.split("\t") as [string, string];
 			return { ref, sha };
 		})
-		.filter(({ ref }) => ref.endsWith(`/${diveId}`))
+		.filter(({ ref }) => isDiveRef(ref, diveId))
 		.sort((a, b) => Number(runGit(dir, "log", "-1", "--format=%ct", b.sha).text || 0) - Number(runGit(dir, "log", "-1", "--format=%ct", a.sha).text || 0));
 }
 
@@ -426,7 +431,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
 	const trunk = heroTrunk(hero);
-	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
+	runGit(hero.dir, "fetch", "-q", "--prune", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
 	const puts: Put[] = [

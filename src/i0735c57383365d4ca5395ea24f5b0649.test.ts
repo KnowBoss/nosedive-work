@@ -85,8 +85,11 @@ test("refuses when the dive's ref moved since it was jumped, pushing nothing", a
 
 test("a dive packed from one checkout of the hero is jumped from another with its work, and keeps one ref", async () => {
 	const f = fixture("pack-shared");
-	const other = join(f.hero, "..", "other-checkout");
-	git(f.hero, "worktree", "add", "-q", "-b", "other", other, "HEAD");
+	// A clone, not a worktree: it shares no refs, so jump finds the dive through what it fetches.
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
 	await jump({ ref: f.featId }, { ...f.ctx, cwd: other });
 	const theirs = join(other, "workspace", "data");
 	writeFileSync(join(theirs, "idea.md"), "theirs\n");

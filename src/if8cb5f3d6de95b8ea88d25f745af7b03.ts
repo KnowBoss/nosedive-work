@@ -10,7 +10,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, heroDoc, heroTrunk, holderOf, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, heroDoc, heroTrunk, holderOf, isDiveRef, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -23,10 +23,12 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	const holder = holderOf(hero);
 	// A dive minted or packed from another checkout of the hero is on origin's trunk, not yet here.
 	const trunk = heroTrunk(hero);
-	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
-	if (!runGit(hero.dir, "status", "--porcelain").text && runGit(hero.dir, "merge-base", "--is-ancestor", "HEAD", `refs/remotes/origin/${trunk}`).ok) {
-		runGit(hero.dir, "merge", "-q", "--ff-only", `refs/remotes/origin/${trunk}`);
-	}
+	runGit(hero.dir, "fetch", "-q", "--prune", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
+	const dirty = runGit(hero.dir, "status", "--porcelain").text !== "";
+	const diverged = !runGit(hero.dir, "merge-base", "--is-ancestor", "HEAD", `refs/remotes/origin/${trunk}`).ok;
+	if (!dirty && !diverged) runGit(hero.dir, "merge", "-q", "--ff-only", `refs/remotes/origin/${trunk}`);
+	const behind = runGit(hero.dir, "rev-list", "--count", `HEAD..refs/remotes/origin/${trunk}`).text;
+	const stale = behind === "0" ? "" : `; ${trunk} on origin is ${behind} commit${behind === "1" ? "" : "s"} ahead, but the hero ${dirty ? "has uncommitted changes" : `holds commits ${trunk} lacks`}, so it was not fast-forwarded`;
 	const open = openDives(hero);
 	const held = open.filter((doc) => metaOf(doc).diver === holder);
 	const named = (doc: Doc) => `${String(doc.fm.name)} (${String(doc.fm.id)})`;
@@ -34,13 +36,13 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	let target: Doc;
 	if (typeof args.ref === "string") {
 		const found = heroDoc(hero, args.ref);
-		if (!found) throw new Error(`no doc ${args.ref} in the hero`);
+		if (!found) throw new Error(`no doc ${args.ref} in the hero${stale}`);
 		target = found;
 	} else if (held.length > 0) {
 		target = held[0]!;
 	} else {
 		const free = open.filter((doc) => !metaOf(doc).diver && (metaOf(doc).packer ?? me) === me);
-		if (free.length !== 1) throw new Error(free.length === 0 ? "no dive waits for you here: `nosedive jump <feat or dive>` names one" : `${free.length} dives wait for you, so name one:\n  ${free.map(named).join("\n  ")}`);
+		if (free.length !== 1) throw new Error(free.length === 0 ? `no dive waits for you here: \`nosedive jump <feat or dive>\` names one${stale}` : `${free.length} dives wait for you, so name one:\n  ${free.map(named).join("\n  ")}`);
 		target = free[0]!;
 	}
 	const isDive = isWorkDive(target);
@@ -181,7 +183,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 function newestRef(dir: string, diveId: string): string | undefined {
 	const ref = runGit(dir, "for-each-ref", "--sort=-committerdate", "--format=%(objectname) %(refname)", "refs/nosedive")
 		.text.split("\n")
-		.find((line) => line.endsWith(`/${diveId}`));
+		.find((line) => isDiveRef(line, diveId));
 	return ref?.split(" ")[0];
 }
 

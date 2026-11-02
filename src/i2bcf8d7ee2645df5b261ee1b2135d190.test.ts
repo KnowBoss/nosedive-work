@@ -26,6 +26,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to trunk, d
 	git(f.hero, "add", "-A");
 	git(f.hero, "commit", "-q", "-m", "a note");
 	await pack({}, f.ctx);
+	git(f.remote, "update-ref", `refs/nosedive/dives/${f.heroId}/main/${id}`, git(f.checkout, "rev-parse", "HEAD"));
 	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "feat(ideas): pack diver@example.com put it down");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive, "pack's record says nosedive made it");
 	await jump({ ref: id }, f.ctx);
@@ -41,7 +42,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to trunk, d
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive);
 	assert.equal(git(f.checkout, "log", "-1", "--format=%s"), "add idea.md");
 	assert.equal(git(f.checkout, "log", "-1", "--format=%an %ae %aI"), author, "the same author");
-	assert.equal(git(f.remote, "for-each-ref", `refs/nosedive/${f.heroId}/dives`), "", "the dive's ref is gone");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "", "the dive's refs are gone, under its old name too");
 	assert.equal(git(f.hero, "ls-remote", "origin", `refs/nosedive/${f.heroId}/dives/*`), "", "the hero's too");
 	const trunk = git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), trunk, "the hero's work and record are on trunk");

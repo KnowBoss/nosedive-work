@@ -51,6 +51,20 @@ test("refuses a second dive while this checkout holds one, a doc that is neither
 	assert.equal(git(f.checkout, "status", "--porcelain"), "?? draft.md", "its checkout is the diver's to change");
 });
 
+test("a dive minted from another clone of the hero is not found while this one cannot fast-forward, and says why", async () => {
+	const f = fixture("jump-stale");
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	await jump({ ref: f.featId }, { ...f.ctx, cwd: other });
+	// The dive is the doc jump's bookkeeping added beside the feat.
+	const id = git(other, "diff", "--name-only", "HEAD^", "HEAD").split("\n").map((path) => /([0-9a-f-]{36})\.md$/.exec(path)?.[1]).find((each) => each && each !== f.featId)!;
+
+	writeFileSync(join(f.hero, "scratch.md"), "mine\n");
+	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`no doc ${id} in the hero; main on origin is 1 commit ahead, but the hero has uncommitted changes, so it was not fast-forwarded`));
+});
+
 test("without a ref, takes the one dive waiting for the pilot, and refuses when none is", async () => {
 	const f = fixture("jump-bare");
 	await assert.rejects(jump({}, f.ctx), /no dive waits for you here: `nosedive jump <feat or dive>` names one/);
