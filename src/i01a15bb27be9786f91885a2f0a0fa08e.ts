@@ -6,7 +6,7 @@ import type { Cape } from "nosedive-core";
 import { i01a138b2b8ee703cab227b010f588b6a as locateKbDoc } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
 import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-core";
-import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
+import { i01a147171f057d019118aaa1f269f5fd as findKind, isDurable } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
 import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
@@ -354,7 +354,7 @@ export function durableFeat(hero: Hero, dive: Doc, capes: Cape[]): string {
 		if (doc) {
 			const kind = docKind(doc);
 			const spelling = kind.owner === hero.id ? kind.name : `${kind.owner}:${kind.name}`;
-			if (findKind(spelling, hero, capes)?.durable === true) return id;
+			if (isDurable(findKind(spelling, hero, capes))) return id;
 		}
 		queue.push(...(tree.get(id)?.parents ?? []));
 	}
