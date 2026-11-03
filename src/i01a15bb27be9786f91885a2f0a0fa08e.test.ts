@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { digestOf, featNameOf, holderToken, type KindMeta } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, WORK_ID, heroDoc, holderOf, isDive, isWip, openDives, readScopes, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, WORK_ID, heroDoc, holderOf, isDive, isWip, openDives, wip, readScopes, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { fixture } from "../test/harness.ts";
 
@@ -65,7 +65,9 @@ test("a dive's work in progress is told by its name, in the subject pack writes 
 	await jump({ ref: f.featId }, f.ctx);
 	const dive = diveOnDeck(hero, f.ctx).doc;
 	const name = String(dive.fm.name);
-	assert.equal(isWip(dive, `feat(ideas): pack work in progress on ${name}`), true);
+	assert.equal(isWip(dive, wip(dive)), true, "as pack names it");
+	assert.equal(wip(dive), `pack(${name}): work in progress`);
+	assert.equal(isWip(dive, `feat(ideas): pack work in progress on ${name}`), true, "as pack named it while feats grouped the loop's commits");
 	assert.equal(isWip(dive, `feat(renamed): pack work in progress on ${name}`), true, "whatever the feat is called");
 	assert.equal(isWip(dive, `pack: work in progress on ${name}`), true, "with no feat to name");
 	assert.equal(isWip(dive, `pack(${name}): work in progress`), true, "legacy");

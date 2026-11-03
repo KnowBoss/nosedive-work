@@ -8,7 +8,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind, isDurable } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
-import { CORE_OWNER, holderToken, subjectLine, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
+import { CORE_OWNER, holderToken, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
 import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -74,20 +74,14 @@ export function diveRef(hero: Hero, diveId: string): string {
 }
 
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
-export function wip(hero: Hero, dive: Doc): string {
-	return subjectLine(featName(hero, dive), "pack", `work in progress on ${String(dive.fm.name)}`);
+export function wip(dive: Doc): string {
+	return `pack(${String(dive.fm.name)}): work in progress`;
 }
 
-/** Whether a commit's subject is this dive's work in progress, as pack names it now, whatever the feat's name, or named it before feats grouped commits; another dive's is not. */
+/** Whether a commit's subject is this dive's work in progress, as pack names it, or as it named it while feats grouped the loop's commits, whatever the feat's name; another dive's is not. */
 export function isWip(dive: Doc, subject: string): boolean {
 	const name = String(dive.fm.name);
 	return subject === `pack(${name}): work in progress` || /^(?:feat\([^)]*\): pack |pack: )work in progress on (.*)$/.exec(subject)?.[1] === name;
-}
-
-/** The name of a dive's feat, which groups the commits of its loop; nothing when the hero does not hold the feat. */
-export function featName(hero: Hero, dive: Doc): string | undefined {
-	const name = heroDoc(hero, featOf(dive))?.fm.name;
-	return name === undefined ? undefined : String(name);
 }
 
 /** Whether a ref holds the dive's work, under its name now or before hero-dive-refs: a `dives` segment, the dive's id last. */
@@ -450,7 +444,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	for (const put of puts) {
 		if (runGit(put.dir, "status", "--porcelain").text) {
 			runGit(put.dir, "add", "-A");
-			const committed = runGit(put.dir, "commit", "-q", "-m", commitMessage(wip(hero, dive.doc), version));
+			const committed = runGit(put.dir, "commit", "-q", "-m", commitMessage(wip(dive.doc), version));
 			if (!committed.ok) throw new Error(`cannot commit ${put.name}'s uncommitted work: ${committed.text}`);
 		}
 		put.commits = runGit(put.dir, "log", "--format=%h %s", put.base + "..HEAD").text.split("\n").filter(Boolean);

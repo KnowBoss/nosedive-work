@@ -16,7 +16,7 @@ test("sets and clears meta, replaces scopes, appends a dated section, and commit
 	assert.doesNotMatch(text, /meta:/, "a meta emptied is dropped");
 	assert.match(text, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}ref: abc\\n`));
 	assert.match(text, /\n## \d{4}-\d\d-\d\dT[\d:.]+Z jumped\n\n- one\n\n## \d{4}-\d\d-\d\dT[\d:.]+Z packed\n\n- two\n$/);
-	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "pack: put down");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), `pack(${String(doc.fm.name)}): put down`, "the command, then the doc it acted on, whatever feat the hero holds");
 	assert.equal(git(f.hero, "rev-parse", "origin/main"), pushed, "not pushed");
 });
 

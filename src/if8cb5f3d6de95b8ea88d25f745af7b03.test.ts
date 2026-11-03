@@ -23,7 +23,7 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.match(f.doc(f.featId), new RegExp(`- kb/${id}\\.md:\\n {6}rel: dives\\.feat\\n`));
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), `${f.heroId}/main/${id}`);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), trunk, "with no work branch yet, it starts at trunk");
-	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "feat(ideas): jump diver@example.com picked it up");
+	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^jump\(ideas\.[0-9a-f]{6}\): diver@example\.com picked it up$/, "the command first, then the dive it acted on");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "which says nosedive made it, once");
 	assert.equal(git(f.hero, "status", "--porcelain"), "", "the feat's link rides the same commit");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], "the bookkeeping is on trunk");
@@ -110,7 +110,7 @@ test("replays the dive's hero work on its bookkeeping, and refuses while the her
 
 	await jump({ ref: id }, f.ctx);
 	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "a note");
-	assert.equal(git(f.hero, "log", "-1", "--format=%s", "HEAD^"), "feat(ideas): jump diver@example.com picked it up");
+	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD^"), /^jump\(ideas\.[0-9a-f]{6}\): diver@example\.com picked it up$/);
 	assert.equal(git(f.hero, "status", "--porcelain"), "?? kb/draft.md", "uncommitted again");
 	assert.match(f.doc(id), /\n- hero: 2 commits replayed\n$/);
 
