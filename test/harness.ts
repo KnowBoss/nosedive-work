@@ -57,7 +57,7 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 	mkdirSync(join(hero, docs), { recursive: true });
 	mkdirSync(join(hero, repos), { recursive: true });
 	mkdirSync(join(hero, ".nosedive", "kinds"));
-	writeFileSync(join(hero, ".nosedive", "kinds", `${memoKind}.md`), `---\nkind: kind\nid: ${memoKind}\nname: memo\ngist: "A note"\nmeta:\n  durable: true\n---\n\n# Memo\n`);
+	writeFileSync(join(hero, ".nosedive", "kinds", `${memoKind}.md`), `---\nkind: kind\nid: ${memoKind}\nname: memo\ngist: "A note"\n---\n\n# Memo\n`);
 	writeFileSync(join(hero, ".nosedive", ".gitignore"), "cache/\ncapes/\nlocal/\n");
 	const feats = `links:\n  - ${docs}/${featId}.md:\n      rel: work.feat\n`;
 	if (options.roots) {
