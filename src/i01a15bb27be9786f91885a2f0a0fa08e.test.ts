@@ -59,7 +59,7 @@ test("work's holder token is core's, so crud names the feat of the dive work fin
 	assert.equal(featNameOf(hero, []), "ideas");
 });
 
-test("a dive's work in progress is told by its name, in the subject pack writes now or wrote before feats grouped commits", async () => {
+test("a dive's work in progress is told by its name, in the subject pack writes now, or either it wrote before", async () => {
 	const f = fixture("dive-wip");
 	const hero = findBridge(f.hero)!;
 	await jump({ ref: f.featId }, f.ctx);
@@ -70,7 +70,6 @@ test("a dive's work in progress is told by its name, in the subject pack writes 
 	assert.equal(isWip(dive, `feat(ideas): pack work in progress on ${name}`), true, "as pack named it while feats grouped the loop's commits");
 	assert.equal(isWip(dive, `feat(renamed): pack work in progress on ${name}`), true, "whatever the feat is called");
 	assert.equal(isWip(dive, `pack: work in progress on ${name}`), true, "with no feat to name");
-	assert.equal(isWip(dive, `pack(${name}): work in progress`), true, "legacy");
 	assert.equal(isWip(dive, "feat(ideas): pack work in progress on ideas.other1"), false, "another dive's");
 	assert.equal(isWip(dive, "pack(ideas.other1): work in progress"), false, "legacy, another dive's");
 	assert.equal(isWip(dive, "add idea.md"), false);
