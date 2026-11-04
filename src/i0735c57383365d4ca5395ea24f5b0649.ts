@@ -1,6 +1,6 @@
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, emailOf, heroDoc, pushTrunk, putDown, readOnlyRefusals, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, emailOf, heroBase, heroDoc, metaOf, pushTrunk, putDown, readOnlyRefusals, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 
 export async function i0735c57383365d4ca5395ea24f5b0649(args: Args, ctx: Ctx): Promise<void> {
@@ -17,6 +17,6 @@ export async function i0735c57383365d4ca5395ea24f5b0649(args: Args, ctx: Ctx): P
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
 		recordDive(hero, doc, { action: "pack", label: "packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, doc, refs), lines: [`${me} put it down.`, "", ...lines] }, ctx.capes[0]!.version);
-	});
+	}, heroBase(hero, metaOf(dive.doc).from));
 	ctx.out(`packed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }

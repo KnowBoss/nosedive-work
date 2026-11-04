@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, heroDoc, heroTrunk, localBranch, packIgnored, pushTrunk, readOnlyRefusals, scopesWith, stamp } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchBase, heroBase, heroDoc, localBranch, metaOf, packIgnored, pushTrunk, readOnlyRefusals, scopesWith, stamp } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -46,14 +46,16 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		lines.push(`- ${scope.name}: pushed ${head.slice(0, 7)} to ${scope.branch}`);
 	}
 
-	const trunk = heroTrunk(hero);
-	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
-	const rebased = runGit(hero.dir, "rebase", "-q", `refs/remotes/origin/${trunk}`);
+	// Trunk, or the local branch a dive jumped --from is based on (jump-from-local-base).
+	const base = heroBase(hero, metaOf(dive.doc).from);
+	const trunk = base.name;
+	fetchBase(hero, base);
+	const rebased = runGit(hero.dir, "rebase", "-q", base.ref);
 	if (!rebased.ok) {
 		runGit(hero.dir, "rebase", "--abort");
 		throw new Error(`the hero's work conflicts with ${trunk}; its scopes landed, the hero did not: rebase it onto ${trunk}, then land ${id} again\n${rebased.text}`);
 	}
-	const heroWork = runGit(hero.dir, "rev-list", "--count", `refs/remotes/origin/${trunk}..HEAD`).text;
+	const heroWork = runGit(hero.dir, "rev-list", "--count", `${base.ref}..HEAD`).text;
 	if (heroWork !== "0") {
 		stamp(hero.dir, ["HEAD", "--not", "--remotes=origin"], trailers);
 		lines.push(`- hero: ${heroWork} commit${heroWork === "1" ? "" : "s"} onto ${trunk}`);
@@ -62,7 +64,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	pushTrunk(hero, () => {
 		const doc = heroDoc(hero, id)!;
 		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
-	});
+	}, base);
 
 	const featId = featOf(dive.doc);
 	deleteRefs(hero.dir, diveRefs(hero.dir, id).map(({ ref }) => ref));

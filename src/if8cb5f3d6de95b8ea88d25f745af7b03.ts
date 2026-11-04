@@ -10,7 +10,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, heroDoc, heroTrunk, holderOf, isDiveRef, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, repoDoc, scopesWith, swapIgnored, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, fetchBase, heroBase, heroDoc, heroTrunk, holderOf, isDiveRef, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, publishBase, repoDoc, scopesWith, swapIgnored, toBase, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -21,14 +21,17 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	if (!hero?.workspace) throw new Error("jump works in a hero repo, and this is not one: `nosedive seed` makes one");
 	const me = emailOf(hero);
 	const holder = holderOf(hero);
+	// --from works the dive against a local branch of the hero in place of origin's trunk (jump-from-local-base).
+	const requested = typeof args.from === "string" ? args.from : undefined;
+	if (requested && !runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/heads/${requested}`).ok) throw new Error(`--from ${requested} names no local branch of the hero`);
 	// A dive minted or packed from another checkout of the hero is on origin's trunk, not yet here.
 	const trunk = heroTrunk(hero);
 	runGit(hero.dir, "fetch", "-q", "--prune", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
 	const dirty = runGit(hero.dir, "status", "--porcelain").text !== "";
 	const diverged = !runGit(hero.dir, "merge-base", "--is-ancestor", "HEAD", `refs/remotes/origin/${trunk}`).ok;
-	if (!dirty && !diverged) runGit(hero.dir, "merge", "-q", "--ff-only", `refs/remotes/origin/${trunk}`);
+	if (!requested && !dirty && !diverged) runGit(hero.dir, "merge", "-q", "--ff-only", `refs/remotes/origin/${trunk}`);
 	const behind = runGit(hero.dir, "rev-list", "--count", `HEAD..refs/remotes/origin/${trunk}`).text;
-	const stale = behind === "0" ? "" : `; ${trunk} on origin is ${behind} commit${behind === "1" ? "" : "s"} ahead, but the hero ${dirty ? "has uncommitted changes" : `holds commits ${trunk} lacks`}, so it was not fast-forwarded`;
+	const stale = requested || behind === "0" ? "" : `; ${trunk} on origin is ${behind} commit${behind === "1" ? "" : "s"} ahead, but the hero ${dirty ? "has uncommitted changes" : `holds commits ${trunk} lacks`}, so it was not fast-forwarded`;
 	const open = openDives(hero);
 	const held = open.filter((doc) => metaOf(doc).diver === holder);
 	const named = (doc: Doc) => `${String(doc.fm.name)} (${String(doc.fm.id)})`;
@@ -60,6 +63,14 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	}
 	const again = isDive && metaOf(target).diver === holder;
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
+	// A dive keeps the base it was jumped against; a feat's new dive takes --from's.
+	const recorded = isDive ? metaOf(target).from : undefined;
+	if (isDive && requested !== undefined && requested !== recorded) {
+		throw new Error(recorded ? `dive ${String(target.fm.name)} is worked from ${recorded}, not ${requested}` : `dive ${String(target.fm.name)} is worked against trunk, so it takes no --from`);
+	}
+	const from = isDive ? recorded : requested;
+	const base = heroBase(hero, from);
+	if (base.local) fetchBase(hero, base);
 
 	// A checkout already where the dive wants it is the diver's to change; any other must lose nothing by moving.
 	const plan = readScopes(hero, target).map((entry): Planned => {
@@ -74,8 +85,14 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	const refused = plan.filter((scope) => existsSync(scope.dir) && !scope.settled && runGit(scope.dir, "status", "--porcelain").text).map((scope) => `${scope.shown} has uncommitted changes or untracked files`);
 	if (!again) {
 		if (runGit(hero.dir, "status", "--porcelain").text) refused.unshift("the hero has uncommitted changes");
-		const ahead = runGit(hero.dir, "rev-list", "--count", `refs/remotes/origin/${trunk}..HEAD`).text;
-		if (ahead !== "0") refused.unshift(`the hero holds ${ahead} commit${ahead === "1" ? "" : "s"} ${trunk} lacks`);
+		const ahead = runGit(hero.dir, "rev-list", "--count", `${base.ref}..HEAD`).text;
+		if (ahead !== "0") refused.unshift(`the hero holds ${ahead} commit${ahead === "1" ? "" : "s"} ${base.name} lacks`);
+		// A local base is kept current with its branch on origin, when origin has one.
+		const upstream = `refs/remotes/origin/${base.name}`;
+		if (base.local && runGit(hero.dir, "rev-parse", "--verify", "-q", upstream).ok) {
+			const lacks = runGit(hero.dir, "rev-list", "--count", `${base.ref}..${upstream}`).text;
+			if (lacks !== "0") refused.unshift(`${base.name} lacks ${lacks} commit${lacks === "1" ? "" : "s"} origin/${base.name} has: bring it up to date first`);
+		}
 	}
 	if (refused.length > 0) throw new Error(`jump would lose work, so nothing moved:\n  ${refused.join("\n  ")}`);
 
@@ -125,10 +142,10 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId)]));
 		const heroPacked = newestRef(hero.dir, diveId);
 		refs.set(hero.id!, heroPacked);
-		const replayed = heroPacked ? runGit(hero.dir, "rev-list", "--count", `refs/remotes/origin/${trunk}..${heroPacked}`).text : "0";
+		const replayed = heroPacked ? runGit(hero.dir, "rev-list", "--count", `${base.ref}..${heroPacked}`).text : "0";
 		if (replayed !== "0") lines.push(`- hero: ${replayed} commit${replayed === "1" ? "" : "s"} replayed`);
 		for (let tries = 0; ; tries++) {
-			runGit(hero.dir, "reset", "-q", "--hard", `refs/remotes/origin/${trunk}`);
+			toBase(hero, base);
 			const also: string[] = [];
 			if (!isDive) {
 				const feat = heroDoc(hero, String(target.fm.id))!;
@@ -139,27 +156,24 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			if (!dive || !isWorkDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
 			if (diver && diver !== holder) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
-			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
+			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null, ...(from && !isDive ? { from } : {}) }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
 			const bookkeeping = runGit(hero.dir, "rev-parse", "HEAD").text;
 			if (heroPacked) {
-				const base = runGit(hero.dir, "merge-base", heroPacked, `refs/remotes/origin/${trunk}`).text;
-				const picked = runGit(hero.dir, "cherry-pick", "--allow-empty", `${base}..${heroPacked}`);
+				const since = runGit(hero.dir, "merge-base", heroPacked, base.ref).text;
+				const picked = runGit(hero.dir, "cherry-pick", "--allow-empty", `${since}..${heroPacked}`);
 				if (!picked.ok) {
 					runGit(hero.dir, "cherry-pick", "--abort");
-					runGit(hero.dir, "reset", "-q", "--hard", `refs/remotes/origin/${trunk}`);
-					throw new Error(`the dive's hero work conflicts with ${trunk}, so nothing was pushed:\n${picked.text}`);
+					toBase(hero, base);
+					throw new Error(`the dive's hero work conflicts with ${base.name}, so nothing was pushed:\n${picked.text}`);
 				}
 			}
-			const pushed = runGit(hero.dir, "push", "-q", "origin", `${bookkeeping}:refs/heads/${trunk}`);
-			if (pushed.ok) {
-				runGit(hero.dir, "update-ref", `refs/remotes/origin/${trunk}`, bookkeeping);
-				break;
+			const pushed = publishBase(hero, base, bookkeeping);
+			if (pushed.ok) break;
+			if (tries === 2 || base.local) {
+				toBase(hero, base);
+				throw new Error(`cannot ${base.local ? "move" : "push"} the hero's bookkeeping to ${base.name}: ${pushed.text}`);
 			}
-			if (tries === 2) {
-				runGit(hero.dir, "reset", "-q", "--hard", `refs/remotes/origin/${trunk}`);
-				throw new Error(`cannot push the hero's bookkeeping to ${trunk}: ${pushed.text}`);
-			}
-			runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
+			fetchBase(hero, base);
 		}
 	}
 

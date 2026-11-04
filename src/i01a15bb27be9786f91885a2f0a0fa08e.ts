@@ -58,6 +58,44 @@ export function heroTrunk(hero: Hero): string {
 	return runGit(hero.dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "") || "main";
 }
 
+/**
+ * Where the hero's records go for a dive: origin's trunk, pushed; or, for a dive jumped `--from` a branch, that local
+ * branch, moved and never pushed (jump-from-local-base).
+ */
+export type Base = { name: string; ref: string; local: boolean };
+
+/** The base of a dive that records `from`, or of one jumped `--from` it; else origin's trunk. */
+export function heroBase(hero: Hero, from?: string): Base {
+	if (from) return { name: from, ref: `refs/heads/${from}`, local: true };
+	const trunk = heroTrunk(hero);
+	return { name: trunk, ref: `refs/remotes/origin/${trunk}`, local: false };
+}
+
+/** Fetches what the base follows on origin, and the nosedive refs: trunk, or the branch a local base is kept current with. */
+export function fetchBase(hero: Hero, base: Base): void {
+	if (!base.local) {
+		runGit(hero.dir, "fetch", "-q", "--prune", "origin", `+refs/heads/${base.name}:refs/remotes/origin/${base.name}`, "+refs/nosedive/*:refs/nosedive/*");
+		return;
+	}
+	// A local base may have no branch of its name on origin; the nosedive refs are fetched either way.
+	runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${base.name}:refs/remotes/origin/${base.name}`);
+	runGit(hero.dir, "fetch", "-q", "--prune", "origin", "+refs/nosedive/*:refs/nosedive/*");
+}
+
+/** Puts the hero at its base: reset to trunk, or detached at a local base so the hero's own work stays apart from it. */
+export function toBase(hero: Hero, base: Base): void {
+	if (base.local) runGit(hero.dir, "checkout", "-q", "--detach");
+	runGit(hero.dir, "reset", "-q", "--hard", base.ref);
+}
+
+/** Makes a commit the base: pushed to trunk on origin, or the local base moved to it. */
+export function publishBase(hero: Hero, base: Base, sha: string): { ok: boolean; text: string } {
+	if (base.local) return runGit(hero.dir, "update-ref", base.ref, sha);
+	const pushed = runGit(hero.dir, "push", "-q", "origin", `${sha}:refs/heads/${base.name}`);
+	if (pushed.ok) runGit(hero.dir, "update-ref", base.ref, sha);
+	return pushed;
+}
+
 /** Fetches a repo's branches and nosedive refs from origin. */
 export function fetchAll(dir: string): void {
 	runGit(dir, "fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/nosedive/*:refs/nosedive/*");
@@ -324,10 +362,10 @@ export function featOf(dive: Doc): string {
 }
 
 /** A dive's open/held state. */
-export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: string } {
+export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: string; from?: string } {
 	const meta = (dive.fm.meta ?? {}) as Record<string, unknown>;
 	const text = (value: unknown) => (typeof value === "string" ? value : undefined);
-	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome) };
+	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome), from: text(meta.from) };
 }
 
 /** Every dive of work's kind that core's feat-tree finds open. */
@@ -424,13 +462,13 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const { hero } = dive;
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
-	const trunk = heroTrunk(hero);
-	runGit(hero.dir, "fetch", "-q", "--prune", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`, "+refs/nosedive/*:refs/nosedive/*");
+	const base = heroBase(hero, metaOf(dive.doc).from);
+	fetchBase(hero, base);
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
 	const puts: Put[] = [
 		...writable.map((scope): Put => ({ key: scope.repoId, name: scope.name, dir: scope.dir, base: baseOf(scope), recorded: scope.ref, commits: [] })),
-		{ key: hero.id!, name: "hero", dir: hero.dir, base: `refs/remotes/origin/${trunk}`, recorded: heroRef(hero, dive.doc), commits: [] },
+		{ key: hero.id!, name: "hero", dir: hero.dir, base: base.ref, recorded: heroRef(hero, dive.doc), commits: [] },
 	];
 
 	// Every lease is checked before anything is committed or pushed.
@@ -475,30 +513,26 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 		if (ignored.length > 0) runGit(scope.dir, "clean", "-q", "-f", "-d", "--", ...ignored);
 		runGit(scope.dir, "branch", "-q", "-D", localBranch(hero, id));
 	}
-	runGit(hero.dir, "reset", "-q", "--hard", `refs/remotes/origin/${trunk}`);
+	toBase(hero, base);
 	return { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 }
 
 /**
- * Commits a record on top of the hero's branch with `record` and pushes it to trunk; when trunk moved meanwhile, it
- * drops the record, rebases onto the new tip and records again.
+ * Commits a record on top of the hero's branch with `record` and makes it the base: pushed to trunk, where, when trunk
+ * moved meanwhile, it drops the record, rebases onto the new tip and records again; or moving a local base.
  */
-export function pushTrunk(hero: Hero, record: () => void): void {
-	const trunk = heroTrunk(hero);
+export function pushTrunk(hero: Hero, record: () => void, base: Base = heroBase(hero)): void {
 	for (let tries = 0; ; tries++) {
 		record();
-		const pushed = runGit(hero.dir, "push", "-q", "origin", `HEAD:refs/heads/${trunk}`);
-		if (pushed.ok) {
-			runGit(hero.dir, "update-ref", `refs/remotes/origin/${trunk}`, "HEAD");
-			return;
-		}
+		const pushed = publishBase(hero, base, runGit(hero.dir, "rev-parse", "HEAD").text);
+		if (pushed.ok) return;
 		runGit(hero.dir, "reset", "-q", "--hard", "HEAD^");
-		if (tries === 2) throw new Error(`cannot push the hero's record to ${trunk}: ${pushed.text}`);
-		runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
-		const rebased = runGit(hero.dir, "rebase", "-q", `refs/remotes/origin/${trunk}`);
+		if (tries === 2 || base.local) throw new Error(`cannot ${base.local ? "move" : "push"} the hero's record to ${base.name}: ${pushed.text}`);
+		fetchBase(hero, base);
+		const rebased = runGit(hero.dir, "rebase", "-q", base.ref);
 		if (!rebased.ok) {
 			runGit(hero.dir, "rebase", "--abort");
-			throw new Error(`the hero's work conflicts with ${trunk} as it moved: ${rebased.text}`);
+			throw new Error(`the hero's work conflicts with ${base.name} as it moved: ${rebased.text}`);
 		}
 	}
 }
