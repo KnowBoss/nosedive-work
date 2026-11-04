@@ -66,7 +66,11 @@ export type Base = { name: string; ref: string; local: boolean };
 
 /** The base of a dive that records `from`, or of one jumped `--from` it; else origin's trunk. */
 export function heroBase(hero: Hero, from?: string): Base {
-	if (from) return { name: from, ref: `refs/heads/${from}`, local: true };
+	if (from) {
+		// A branch deleted since, as merging a pull request can, would read as empty and lose the dive's record of its work.
+		if (!runGit(hero.dir, "rev-parse", "--verify", "-q", `refs/heads/${from}`).ok) throw new Error(`the dive is worked from ${from}, which the hero no longer has: recreate it, as \`git branch ${from} <commit>\``);
+		return { name: from, ref: `refs/heads/${from}`, local: true };
+	}
 	const trunk = heroTrunk(hero);
 	return { name: trunk, ref: `refs/remotes/origin/${trunk}`, local: false };
 }
@@ -82,15 +86,27 @@ export function fetchBase(hero: Hero, base: Base): void {
 	runGit(hero.dir, "fetch", "-q", "--prune", "origin", "+refs/nosedive/*:refs/nosedive/*");
 }
 
-/** Puts the hero at its base: reset to trunk, or detached at a local base so the hero's own work stays apart from it. */
+/** Refuses a hero checked out on its local base: the base moves with each record, and the holder is named after the hero's own branch. */
+export function offBase(hero: Hero, base: Base): void {
+	if (base.local && runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === base.name) {
+		throw new Error(`the hero is on ${base.name}, the branch the dive is worked from: switch to a branch of its own first, as \`git switch -c <name> ${base.name}\``);
+	}
+}
+
+/** Puts the hero's branch at its base, trunk or a local base, which is never the branch the hero is on. */
 export function toBase(hero: Hero, base: Base): void {
-	if (base.local) runGit(hero.dir, "checkout", "-q", "--detach");
+	offBase(hero, base);
 	runGit(hero.dir, "reset", "-q", "--hard", base.ref);
 }
 
-/** Makes a commit the base: pushed to trunk on origin, or the local base moved to it. */
-export function publishBase(hero: Hero, base: Base, sha: string): { ok: boolean; text: string } {
-	if (base.local) return runGit(hero.dir, "update-ref", base.ref, sha);
+/** The base's tip now, which a local base's move is checked against so nothing that landed on it meanwhile is dropped. */
+export function baseTip(hero: Hero, base: Base): string {
+	return runGit(hero.dir, "rev-parse", base.ref).text;
+}
+
+/** Makes a commit the base: pushed to trunk on origin, or the local base moved to it, only from `was`. */
+export function publishBase(hero: Hero, base: Base, sha: string, was?: string): { ok: boolean; text: string } {
+	if (base.local) return runGit(hero.dir, "update-ref", base.ref, sha, ...(was ? [was] : []));
 	const pushed = runGit(hero.dir, "push", "-q", "origin", `${sha}:refs/heads/${base.name}`);
 	if (pushed.ok) runGit(hero.dir, "update-ref", base.ref, sha);
 	return pushed;
@@ -463,6 +479,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
 	const base = heroBase(hero, metaOf(dive.doc).from);
+	offBase(hero, base);
 	fetchBase(hero, base);
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
@@ -522,9 +539,11 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
  * moved meanwhile, it drops the record, rebases onto the new tip and records again; or moving a local base.
  */
 export function pushTrunk(hero: Hero, record: () => void, base: Base = heroBase(hero)): void {
+	offBase(hero, base);
 	for (let tries = 0; ; tries++) {
+		const was = base.local ? baseTip(hero, base) : undefined;
 		record();
-		const pushed = publishBase(hero, base, runGit(hero.dir, "rev-parse", "HEAD").text);
+		const pushed = publishBase(hero, base, runGit(hero.dir, "rev-parse", "HEAD").text, was);
 		if (pushed.ok) return;
 		runGit(hero.dir, "reset", "-q", "--hard", "HEAD^");
 		if (tries === 2 || base.local) throw new Error(`cannot ${base.local ? "move" : "push"} the hero's record to ${base.name}: ${pushed.text}`);

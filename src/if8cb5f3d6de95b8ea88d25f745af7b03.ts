@@ -10,7 +10,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, fetchBase, heroBase, heroDoc, heroTrunk, holderOf, isDiveRef, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, publishBase, repoDoc, scopesWith, swapIgnored, toBase, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, isDive as isWorkDive, emailOf, featOf, fetchAll, fetchBase, heroBase, heroDoc, heroTrunk, holderOf, isDiveRef, keyOf, localBranch, metaOf, openDives, orphan, quiet, readScopes, offBase, publishBase, repoDoc, baseTip, scopesWith, swapIgnored, toBase, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -70,6 +70,8 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	}
 	const from = isDive ? recorded : requested;
 	const base = heroBase(hero, from);
+	// The base moves with each record, so it is never the branch the hero works on, whose name the holder carries.
+	offBase(hero, base);
 	if (base.local) fetchBase(hero, base);
 
 	// A checkout already where the dive wants it is the diver's to change; any other must lose nothing by moving.
@@ -146,6 +148,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (replayed !== "0") lines.push(`- hero: ${replayed} commit${replayed === "1" ? "" : "s"} replayed`);
 		for (let tries = 0; ; tries++) {
 			toBase(hero, base);
+			const was = base.local ? baseTip(hero, base) : undefined;
 			const also: string[] = [];
 			if (!isDive) {
 				const feat = heroDoc(hero, String(target.fm.id))!;
@@ -167,7 +170,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 					throw new Error(`the dive's hero work conflicts with ${base.name}, so nothing was pushed:\n${picked.text}`);
 				}
 			}
-			const pushed = publishBase(hero, base, bookkeeping);
+			const pushed = publishBase(hero, base, bookkeeping, was);
 			if (pushed.ok) break;
 			if (tries === 2 || base.local) {
 				toBase(hero, base);
