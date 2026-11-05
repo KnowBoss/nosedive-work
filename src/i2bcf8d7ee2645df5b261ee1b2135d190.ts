@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchBase, heroBase, heroDoc, localBranch, metaOf, offBase, packIgnored, pushTrunk, readOnlyRefusals, scopesWith, stamp } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -17,6 +17,15 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	// Every refusal is found before anything is pushed.
 	const refused = readOnlyRefusals(dive);
 	if (runGit(hero.dir, "status", "--porcelain").text) refused.push("the hero has uncommitted changes: commit them first");
+	// The hero's work goes home, the branch the dive was jumped from, which must be its upstream's (records-on-jumped-branch).
+	const { home } = dive;
+	const up = homeUpstream(hero, home);
+	fetchUpstream(hero, up);
+	try {
+		syncHome(hero, home, up);
+	} catch (error) {
+		refused.push((error as Error).message);
+	}
 	const published = new Map<string, string>();
 	for (const scope of writable) {
 		const shown = relative(hero.dir, scope.dir).replace(/\\/g, "/");
@@ -46,27 +55,26 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		lines.push(`- ${scope.name}: pushed ${head.slice(0, 7)} to ${scope.branch}`);
 	}
 
-	// Trunk, or the local branch a dive jumped --from is based on (jump-from-local-base).
-	const base = heroBase(hero, metaOf(dive.doc).from);
-	offBase(hero, base);
-	const trunk = base.name;
-	fetchBase(hero, base);
-	const rebased = runGit(hero.dir, "rebase", "-q", base.ref);
+	const rebased = runGit(hero.dir, "rebase", "-q", `refs/heads/${home}`);
 	if (!rebased.ok) {
 		runGit(hero.dir, "rebase", "--abort");
-		throw new Error(`the hero's work conflicts with ${trunk}; its scopes landed, the hero did not: rebase it onto ${trunk}, then land ${id} again\n${rebased.text}`);
+		throw new Error(`the hero's work conflicts with ${home}; its scopes landed, the hero did not: rebase ${dive.branch} onto ${home}, then land ${id} again\n${rebased.text}`);
 	}
-	const heroWork = runGit(hero.dir, "rev-list", "--count", `${base.ref}..HEAD`).text;
+	const heroWork = runGit(hero.dir, "rev-list", "--count", `refs/heads/${home}..HEAD`).text;
 	if (heroWork !== "0") {
-		// A local base holds commits origin lacks that are not this dive's, its bookkeeping and the branch's own: only the hero's work is stamped.
-		stamp(hero.dir, ["HEAD", "--not", ...(base.local ? [base.ref] : []), "--remotes=origin"], trailers);
-		lines.push(`- hero: ${heroWork} commit${heroWork === "1" ? "" : "s"} onto ${trunk}`);
+		stamp(hero.dir, ["HEAD", "--not", `refs/heads/${home}`, "--remotes=origin"], trailers);
+		lines.push(`- hero: ${heroWork} commit${heroWork === "1" ? "" : "s"} onto ${home}`);
 	}
+	// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
+	const tip = runGit(hero.dir, "rev-parse", "HEAD").text;
+	runGit(hero.dir, "checkout", "-q", home);
+	runGit(hero.dir, "merge", "-q", "--ff-only", tip);
+	runGit(hero.dir, "branch", "-q", "-D", dive.branch);
 	const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
-	pushTrunk(hero, () => {
+	pushRecord(hero, () => {
 		const doc = heroDoc(hero, id)!;
 		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
-	}, base);
+	});
 
 	const featId = featOf(dive.doc);
 	deleteRefs(hero.dir, diveRefs(hero.dir, id).map(({ ref }) => ref));
@@ -76,7 +84,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		if (!scope.branch) continue;
 		// Left where it landed, its branch gone: the work branch holds it now.
 		runGit(scope.dir, "checkout", "-q", "--detach");
-		runGit(scope.dir, "branch", "-q", "-D", localBranch(hero, id));
+		runGit(scope.dir, "branch", "-q", "-D", dive.branch);
 	}
 	ctx.out(`landed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);
 }

@@ -11,7 +11,7 @@ import { fixture, git } from "../test/harness.ts";
 
 const nosedive = "Co-Authored-By: nosedive test <noreply@nosedive.dev>";
 
-test("stamps and pushes the work to its feat's branch and the hero's to trunk, deletes the dive's refs and branch, leaves the checkout detached, and ends the dive", async () => {
+test("stamps and pushes the work to its feat's branch and the hero's to its home between its jump and land records, deletes the dive's refs and branches, leaves the checkout detached and the hero home, and ends the dive", async () => {
 	const f = fixture("land");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -47,12 +47,15 @@ test("stamps and pushes the work to its feat's branch and the hero's to trunk, d
 	const trunk = git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), trunk, "the hero's work and record are on trunk");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD^"), trailers, "the hero's work is stamped too");
+	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD~2"), /^jump\(ideas\.[0-9a-f]{6}\): /, "bookended by the jump and land records");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main", "the hero back home");
+	assert.equal(git(f.hero, "branch", "--list", `nosedive/*/${id}`), "", "its dive branch gone");
 	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n {2}outcome: landed\\n[^]*\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z landed\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n- hero: 1 commit onto main\\n$`));
 	assert.doesNotMatch(f.doc(id), /ref:/, "its refs are gone, so is their record");
 	assert.equal(spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: f.checkout }).status, 1, "detached");
 	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 
-	await jump({ ref: f.featId }, f.ctx);
+	await jump({ ref: f.featId, sure: true }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), head, "a feat's dives stack on its branch");
 });
 
