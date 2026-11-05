@@ -9,7 +9,8 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-core";
 import { i01a147171f057d019118aaa1f269f5fd as findKind, isDurable } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
-import { CORE_OWNER, hasCoAuthor, isCoAuthor, featTree, openDives as coreOpenDives } from "nosedive-core";
+import { CORE_OWNER, hasCoAuthor, isCoAuthor, featTree } from "nosedive-core";
+import { i01a1901e263b7209a4b5f39a71c568b3 as featWalk } from "nosedive-core";
 import { i01a19005c31172b68871d4842563d310 as commitMessage } from "nosedive-core";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -402,9 +403,13 @@ export function metaOf(dive: Doc): { diver?: string; packer?: string; outcome?: 
 	return { diver: text(meta.diver), packer: text(meta.packer), outcome: text(meta.outcome) };
 }
 
-/** Every dive of work's kind that core's feat-tree finds open. */
+/** Every open dive: a doc of work's dive kind that core's feat-tree reaches, as its feat links it `dives.feat`, with no `meta.outcome`. */
 export function openDives(hero: Hero): Doc[] {
-	return coreOpenDives(hero).filter(isDive);
+	const walk = featWalk(hero);
+	return [...walk.feats.keys()].flatMap((id) => {
+		const doc = walk.docs.get(id);
+		return doc && isDive(doc) && !metaOf(doc).outcome ? [doc] : [];
+	});
 }
 
 /** The dive's first durable feat ancestor, its own feat when none is found. */

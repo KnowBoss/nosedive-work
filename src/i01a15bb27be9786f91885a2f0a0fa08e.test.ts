@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { digestOf, featNameOf, holderToken, type KindMeta } from "nosedive-core";
+import { digestOf, featNameOf, type KindMeta } from "nosedive-core";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, WORK_ID, diveBranch, diverOf, heroDoc, isDive, isWip, openDives, parseDiveBranch, tokenOf, wip, readScopes, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { fixture, git } from "../test/harness.ts";
@@ -57,19 +57,21 @@ test("a legacy feat naming a read-only repo by its bare quid is still read", () 
 	assert.deepEqual(readScopes(findBridge(f.hero)!, feat), [{ repoId: f.repoId }]);
 });
 
-test("work's token for a branch is core's holder token on that branch, so a dive's diver is the holder of its home", async () => {
+test("a dive's diver is <email>#<token>, the token a digest of the checkout's path, its home and the email, which its branch carries", async () => {
 	const f = fixture("dive-holder");
 	const hero = findBridge(f.hero)!;
-	assert.equal(diverOf(hero, "main"), holderToken(f.hero), "core's, on the home");
+	assert.match(diverOf(hero, "main"), /^diver@example\.com#[0-9a-f]{12}$/);
+	assert.notEqual(tokenOf(hero, "main"), tokenOf(hero, "other"), "another branch, another token");
 	await jump({ ref: f.featId }, f.ctx);
 	assert.deepEqual(openDives(hero).map((doc) => doc.fm.id), [f.onDeck()]);
 	assert.equal(parseDiveBranch(git(f.hero, "symbolic-ref", "--short", "HEAD"))?.token, tokenOf(hero, "main"));
+	assert.match(f.doc(f.onDeck()), new RegExp(`\n {2}diver: ${diverOf(hero, "main").replace(/[.]/g, "\\.")}\n`));
 });
 
-test("crud names the feat of the dive on deck while the hero is on its dive branch", { todo: "core's commit-subject finds the held dive by the holder token of the branch the hero is on; on a dive branch it must read the dive from the branch's name" }, async () => {
+test("crud groups a commit on the dive branch under the dive its branch names, which core reads as a feat", async () => {
 	const f = fixture("dive-holder-feat");
 	await jump({ ref: f.featId }, f.ctx);
-	assert.equal(featNameOf(findBridge(f.hero)!, []), "ideas");
+	assert.equal(featNameOf(findBridge(f.hero)!, []), `ideas.${f.onDeck().slice(-6)}`);
 });
 
 test("a dive's work in progress is told by its name, in the subject pack writes now, or either it wrote before", async () => {
