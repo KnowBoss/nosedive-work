@@ -78,9 +78,10 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		} else if (isWorkDive(target)) {
 			const meta = metaOf(target);
 			if (meta.outcome) throw new Error(`dive ${String(target.fm.name)} is over: it ${meta.outcome}`);
-			if (meta.diver && meta.diver !== holder) {
+			if (meta.diver && meta.diver !== holder && !bareDiverIs(meta.diver, me)) {
 				const [email, other] = meta.diver.split("#") as [string, string | undefined];
-				const from = other ? homeOf(hero, other) : undefined;
+				if (!other) throw new Error(`dive ${String(target.fm.name)} is held by ${email}, in no checkout in particular: only a checkout whose git user.email is ${email} can take it over (legacy-bare-diver)`);
+				const from = homeOf(hero, other);
 				throw new Error(`dive ${String(target.fm.name)} is held by ${email}${from ? ` from ${from} in this checkout: switch to it, then jump it` : email === me ? " in another checkout of the hero: pack it there" : ""} (held-by-checkout)`);
 			}
 			if (!meta.diver && meta.packer && meta.packer !== me && !sure) throw new Error(`dive ${String(target.fm.name)} was packed by ${meta.packer}: jump it --sure to take it over, its work in progress included (take-over-with-sure)`);
@@ -175,7 +176,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			const dive = heroDoc(hero, diveId);
 			if (!dive || !isWorkDive(dive)) throw new Error(`${diveId} is no dive in the hero`);
 			const { diver } = metaOf(dive);
-			if (diver && diver !== holder) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
+			if (diver && diver !== holder && !bareDiverIs(diver, me)) throw new Error(`dive ${String(dive.fm.name)} was picked up by ${diver.split("#")[0]} meanwhile`);
 			recordDive(hero, dive, { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, dive, refs), lines: [`${me} picked it up.`, "", ...lines], also }, ctx.capes[0]!.version);
 		});
 	}
@@ -265,4 +266,9 @@ function diveKind(hero: Hero, ctx: Ctx) {
 	const kind = findKind(`${WORK_ID}:dive`, hero, ctx.capes);
 	if (!kind) throw new Error("work:dive names no kind here: the hero must wear the work cape");
 	return { owner: kind.owner, pin: pinOf(kind, hero) };
+}
+
+/** A diver legacy wrote, a bare email with no holder token, held by that email in no checkout in particular (legacy-bare-diver). */
+function bareDiverIs(diver: string, email: string): boolean {
+	return !diver.includes("#") && diver === email;
 }

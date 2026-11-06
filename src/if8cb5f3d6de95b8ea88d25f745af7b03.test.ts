@@ -296,3 +296,24 @@ test("a dive this checkout holds whose branch is gone is jumped again without a 
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "on its branch again");
 	assert.equal(git(f.hero, "rev-parse", "main"), before, "no record");
 });
+
+test("a dive legacy left held by a bare email is taken over by a checkout of that email, and refused to anyone else (legacy-bare-diver)", async () => {
+	const f = fixture("jump-bare-diver");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	await pack({}, f.ctx);
+	const path = join(f.hero, "kb", `${id}.md`);
+	const bare = (email: string) => {
+		const text = f.doc(id).replace(/\n  packer: [^\n]+\n/, "\n").replace(/\n  diver: [^\n]*\n/, "\n");
+		assert.ok(text.includes("\nmeta:\n"), "the packed dive has meta");
+		writeFileSync(path, text.replace("\nmeta:\n", `\nmeta:\n  diver: ${email}\n`));
+		git(f.hero, "commit", "-qam", `legacy diver ${email}`);
+		git(f.hero, "push", "-q");
+	};
+	bare("someone@example.com");
+	await assert.rejects(jump({ ref: id }, f.ctx), /is held by someone@example\.com, in no checkout in particular: only a checkout whose git user\.email is someone@example\.com can take it over \(legacy-bare-diver\)/);
+	bare("diver@example.com");
+	await jump({ ref: id }, f.ctx);
+	assert.equal(f.onDeck(), id);
+	assert.match(f.doc(id), /\n  diver: diver@example\.com#[0-9a-f]{12}\n/);
+});
