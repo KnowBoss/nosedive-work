@@ -16,7 +16,7 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	const short = git(f.checkout, "rev-parse", "--short", "HEAD");
 	writeFileSync(join(f.checkout, "draft.md"), "half\n");
 
-	await bail({ why: "a better idea came along" }, f.ctx);
+	await bail({ reason: "a better idea came along" }, f.ctx);
 	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
 	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), `pack(ideas.${id.slice(-6)}): work in progress`, "nothing it held is lost");
@@ -33,5 +33,10 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 
 test("needs a reason", async () => {
 	const f = fixture("bail-reason");
-	await assert.rejects(bail({ why: " " }, f.ctx), /bail needs a reason/);
+	await assert.rejects(bail({ reason: " " }, f.ctx), /bail needs a reason/);
+});
+
+test("bail's usage binds --reason as reason, the key bail reads (bail-reason-binding)", async () => {
+	const { i01a1335482437c9eb145885f65f12aa1: matchUsage } = await import("nosedive-core");
+	assert.equal(matchUsage(["bail [<dive>] --reason <why>"], ["bail", "--reason", "gone stale"]).args.reason, "gone stale");
 });
