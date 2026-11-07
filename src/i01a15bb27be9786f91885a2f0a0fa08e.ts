@@ -69,11 +69,11 @@ export function diverOf(hero: Hero, branch: string): string {
 	return `${emailOf(hero)}#${tokenOf(hero, branch)}`;
 }
 
-const DIVE_BRANCH = /^nosedive\/([0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const DIVE_BRANCH = /^nosedive-([0-9a-f]{12})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
-/** A dive's branch, in the hero and in each writable scope (dive-branches). */
+/** A dive's branch, in the hero and in each writable scope (dive-branches): one segment, so no branch can clash with it (dive-branch-dashes). */
 export function diveBranch(token: string, diveId: string): string {
-	return `nosedive/${token}/${diveId}`;
+	return `nosedive-${token}-${diveId}`;
 }
 
 /** The token and dive id a branch name carries when it is named as a dive branch. */
@@ -456,7 +456,7 @@ export function scopesOf(hero: Hero, doc: Doc, token: string): Scope[] {
 }
 
 /**
- * The dive on deck: the one the hero's branch names, `nosedive/<token>/<dive id>` (dive-branches), open and held by that
+ * The dive on deck: the one the hero's branch names, `nosedive-<token>-<dive id>` (dive-branches), open and held by that
  * token, with its home, the branch it was jumped from (loop-returns-home). Given a dive's quid, refuses any other.
  */
 export function i01a15bb27be9786f91885a2f0a0fa08e(hero: Hero, _ctx: Say, id?: string): Dive {

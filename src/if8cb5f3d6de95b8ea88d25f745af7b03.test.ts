@@ -37,6 +37,16 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.deepEqual(f.out.slice(-3), [`dive  kb/${id}.md`, `feat  kb/${f.featId}.md`, "data  workspace/data"]);
 });
 
+test("a hero with a branch named nosedive still gets its dive branch, which is one segment", async () => {
+	const f = fixture("jump-nosedive-branch");
+	git(f.hero, "branch", "nosedive");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	assert.match(branchOf(f, id), new RegExp(`^nosedive-[0-9a-f]{12}-${id}$`));
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
+	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
+});
+
 test("refuses a second dive while on a dive branch or holding one, a doc that is neither feat nor dive, and a dive another checkout holds; jumping the dive on deck again records nothing", async () => {
 	const f = fixture("jump-refusals");
 	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first/);
