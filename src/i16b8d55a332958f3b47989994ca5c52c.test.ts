@@ -11,6 +11,12 @@ test("a dive not yet jumped may change its feat; a jumped one keeps it", async (
 	await assert.rejects(before({ before: state({ feat: "a", packer: "diver@example.com" }), after: state({ feat: "b" }) } as never), /dive ideas\.briefed was jumped on its feat, so it keeps it/);
 });
 
+test("a dive takes no name but the one its feat gives it", async () => {
+	const named = (name: string) => ({ fm: { name, meta: { feat: "a" } }, body: "" });
+	await assert.rejects(before({ before: named("ideas.briefed"), after: named("my-name") } as never), /dive ideas\.briefed is named after its feat, so it takes no other name/);
+	await before({ before: named("ideas.briefed"), after: named("ideas.briefed") } as never);
+});
+
 test("a dive someone holds is not dropped; one put down, or a mint, passes", async () => {
 	await assert.rejects(before({ before: state({ feat: "a", diver: "diver@example.com#0123456789ab" }) } as never), /dive ideas\.briefed is held by diver@example\.com: land, pack or bail it/);
 	await before({ before: state({ feat: "a", diver: null, packer: "diver@example.com" }) } as never);

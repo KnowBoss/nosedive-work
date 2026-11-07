@@ -42,6 +42,8 @@ test("a dive crud mints gets its feat's scopes, its canonical entry kept, and it
 	await run();
 	assert.match(read(dive), new RegExp(`scopes:\\n {2}- ${WORK_ID}:\\n {6}canonical: true\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`));
 	assert.match(read(dive), /\n## Brief\n\nRead the comments\.$/, "its brief untouched");
+	assert.match(read(dive), new RegExp(`\\nname: ideas\\.${dive.slice(-6)}\\n`), "named after its feat");
+	assert.match(read(dive), /\ngist: "Address review comments"\n/);
 	assert.match(read(f.featId), new RegExp(`- [^\\n]*${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
 });
 
@@ -52,5 +54,6 @@ test("a dive not yet jumped moves to another feat's scopes and link", async () =
 	assert.doesNotMatch(read(dive), /work-branch/, "read-only on data, as the other feat is");
 	assert.match(read(dive), new RegExp(`- ${f.repoId}`));
 	assert.doesNotMatch(read(f.featId), new RegExp(dive), "the old feat no longer links it");
+	assert.match(read(dive), new RegExp(`\\nname: other\\.${dive.slice(-6)}\\n`), "renamed after the new feat");
 	assert.match(read(other), new RegExp(`${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
 });

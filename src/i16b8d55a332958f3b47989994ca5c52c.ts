@@ -17,6 +17,8 @@ export async function i16b8d55a332958f3b47989994ca5c52c(ctx: GateCtx): Promise<v
 		}
 		return;
 	}
+	// Its feat names it (dive-names-derived); moving it to another feat renames it.
+	if (after.fm.name !== before.fm.name) throw new Error(`dive ${name} is named after its feat, so it takes no other name: its gist says what it is for`);
 	const jumped = Boolean(meta.diver || meta.packer || meta.outcome);
 	if (jumped && changed(before, after, "meta.feat")) {
 		throw new Error(`dive ${name} was jumped on its feat, so it keeps it: bail it, and mint a dive on the other feat`);
