@@ -23,6 +23,8 @@ type Planned = ScopeEntry & { repo: Doc; name: string; dir: string; shown: strin
  */
 type Mode = "again" | "rebuild" | "record";
 
+const LISTED = /^(?:.*[\\/])?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
+
 export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): Promise<void> {
 	const hero = findBridge(ctx.cwd);
 	if (!hero?.workspace) throw new Error("jump works in a hero repo, and this is not one: `nosedive seed` makes one");
@@ -55,7 +57,8 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		const holder = `${me}#${token}`;
 		const open = openDives(hero);
 		if (typeof args.ref === "string") {
-			const found = heroDoc(hero, args.ref);
+			// A doc's path, as next prints it, names it by the quid it ends in (listed-paths-accepted).
+			const found = heroDoc(hero, args.ref.replace(LISTED, "$1").toLowerCase());
 			if (!found) throw new Error(`no doc ${args.ref} in the hero on ${home}`);
 			target = found;
 		} else {

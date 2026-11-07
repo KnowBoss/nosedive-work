@@ -37,6 +37,17 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.deepEqual(f.out.slice(-3), [`dive  kb/${id}.md`, `feat  kb/${f.featId}.md`, "data  workspace/data"]);
 });
 
+test("takes a doc's path as next prints it, a feat's or a dive's, for its quid (listed-paths-accepted)", async () => {
+	const f = fixture("jump-listed-path");
+	await jump({ ref: `kb/${f.featId}.md` }, f.ctx);
+	const id = f.onDeck();
+	await pack({}, f.ctx);
+	await jump({ ref: `kb\\${id.toUpperCase()}.md` }, f.ctx);
+	assert.equal(f.onDeck(), id, "the dive by its Windows path, in any case");
+	await pack({}, f.ctx);
+	await assert.rejects(jump({ ref: "kb/nope.md" }, f.ctx), /no doc kb\/nope\.md in the hero/);
+});
+
 test("a hero with a branch named nosedive still gets its dive branch, which is one segment", async () => {
 	const f = fixture("jump-nosedive-branch");
 	git(f.hero, "branch", "nosedive");
