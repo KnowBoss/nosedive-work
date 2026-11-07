@@ -6,6 +6,8 @@ import { after } from "node:test";
 import type { Ctx } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
+import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
+import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
 import { parseDiveBranch } from "../src/i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 const root = mkdtempSync(join(tmpdir(), "nosedive-work-"));
@@ -112,5 +114,24 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 			return git(checkout, "rev-parse", "HEAD");
 		},
 		remoteRef: (ref: string) => spawnSync("git", ["rev-parse", "--verify", "-q", ref], { cwd: remote, encoding: "utf8" }).stdout.trim(),
+		/**
+		 * Plans a dive on the feat as `crud work:dive <gist> --meta:feat <feat> --section:Brief -` would, dive-shape scoping, naming
+		 * and linking it: committed on the hero's main and pushed. Returns its id.
+		 */
+		plan(gist = "Do the next part"): string {
+			const id = mintUuid();
+			const repoScope = options.readOnly ? `  - ${repoId}: {}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
+			const scopes = `scopes:\n  - 01a15bb1-da9e-7d2d-aa82-5ee97257adc6:\n      canonical: true\n${repoScope}`;
+			writeFileSync(join(hero, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ideas.${id.slice(-6)}\ngist: "${gist}"\n${scopes}meta:\n  feat: ${featId}\n---\n\n# ${gist}\n\n## Brief\n\n${gist}.\n`);
+			const featPath = join(hero, docs, `${featId}.md`);
+			const feat = readKbDoc(readFileSync(featPath, "utf8"));
+			const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
+			feat.yaml.set("links", [...links, { [`${docs}/${id}.md`]: { rel: "dives.feat" } }]);
+			writeKbDoc(featPath, feat.yaml, feat.body);
+			git(hero, "add", "-A");
+			git(hero, "commit", "-q", "-m", "plan a dive");
+			git(hero, "push", "-q", "origin", "HEAD:main");
+			return id;
+		},
 	};
 }

@@ -157,12 +157,14 @@ test("moves a checkout left from other work, keeping commits origin lacks on an 
 	const stray = f.commit("stray.md", "stray\n");
 
 	writeFileSync(join(f.checkout, "draft.md"), "draft\n");
-	await assert.rejects(jump({ ref: f.featId }, f.ctx), /ideas has 1 child doc, dives included, so it is no leaf, so next does not list it: jump it --sure to start a dive on it anyway \(sure-off-fringe\)/);
-	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /jump would lose work, so nothing moved:\n {2}workspace\/data has uncommitted changes or untracked files/);
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), /ideas has a dive on it \(\S+\), so a bare jump would start it over/);
+	const planned = f.plan();
+	await assert.rejects(jump({ ref: planned }, f.ctx), /jump would lose work, so nothing moved:\n {2}workspace\/data has uncommitted changes or untracked files/);
 	git(f.checkout, "clean", "-qf");
 
-	await jump({ ref: f.featId, sure: true }, f.ctx);
+	await jump({ ref: planned }, f.ctx);
 	const id = f.onDeck();
+	assert.equal(id, planned);
 	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/orphans/${stray}`), stray);
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.remoteRef("refs/heads/work/ideas"), "a feat's dives stack on its work branch");

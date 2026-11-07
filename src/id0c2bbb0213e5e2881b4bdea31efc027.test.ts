@@ -21,15 +21,18 @@ test("a durable feat is jumped only --sure", async () => {
 	assert.match(f.doc(f.onDeck()), /\n {2}feat: /);
 });
 
-test("a feat already dived is no leaf, so a new attempt on it is started --sure", async () => {
+test("a feat with a dive is not jumped bare, --sure or not, the refusal naming how to plan a briefed dive, which jumps (feat-jumps-bare)", async () => {
 	const f = fixture("sure-attempt");
 	await jump({ ref: f.featId }, f.ctx);
 	const first = f.onDeck();
+	assert.match(f.doc(first), /\ngist: "?An attempt to complete ideas"?\n/);
 	await pack({}, f.ctx);
-	await assert.rejects(jump({ ref: f.featId }, f.ctx), /ideas has 1 child doc, dives included, so it is no leaf, so next does not list it: jump it --sure/);
-	await jumpSure({ ref: f.featId }, f.ctx);
-	const second = f.onDeck();
-	assert.notEqual(second, first, "a second dive on the feat, beside the packed one");
+	const refusal = new RegExp(`ideas has a dive on it \\(kb/${first}\\.md\\), so a bare jump would start it over, --sure or not: finish and drop it first, or plan another dive saying what it does, then jump that:\\n {2}nosedive crud work:dive <gist> --meta:feat ${f.featId} --section:Brief -\\n {2}nosedive jump <dive>$`);
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), refusal);
+	await assert.rejects(jumpSure({ ref: f.featId }, f.ctx), refusal);
+	const second = f.plan();
+	await jump({ ref: second }, f.ctx);
+	assert.equal(f.onDeck(), second, "a second dive on the feat, beside the packed one");
 	await land({}, f.ctx);
 	await jump({ ref: first }, f.ctx);
 	assert.equal(f.onDeck(), first, "the packed one is jumped again by its packer, no --sure needed");

@@ -55,7 +55,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	assert.equal(spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: f.checkout }).status, 1, "detached");
 	assert.equal(git(f.checkout, "branch", "--list", `*/${id}`), "", "its branch is gone");
 
-	await jump({ ref: f.featId, sure: true }, f.ctx);
+	await jump({ ref: f.plan() }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), head, "a feat's dives stack on its branch");
 });
 

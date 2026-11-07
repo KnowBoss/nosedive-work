@@ -88,6 +88,14 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 			mode = meta.diver === holder ? "rebuild" : "record";
 		} else {
 			if (!featRoot(hero, String(target.fm.id))) throw new Error(`${String(target.fm.name)} is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first`);
+			// A bare jump is an attempt at all of the feat, so one with a dive on it, over or not, takes a dive planned with a brief (feat-jumps-bare).
+			const dives = diveLinks(target);
+			if (dives.length > 0) {
+				const id = String(target.fm.id);
+				throw new Error(
+					`${String(target.fm.name)} has ${dives.length === 1 ? "a dive" : `${dives.length} dives`} on it (${dives.join(", ")}), so a bare jump would start it over, --sure or not: finish and drop ${dives.length === 1 ? "it" : "them"} first, or plan another dive saying what it does, then jump that:\n  nosedive crud work:dive <gist> --meta:feat ${id} --section:Brief -\n  nosedive jump <dive>`,
+				);
+			}
 			const off = offFringe(hero, target, ctx);
 			if (off && !sure) throw new Error(`${off}, so next does not list it: jump it --sure to start a dive on it anyway (sure-off-fringe)`);
 			mode = "record";
@@ -215,6 +223,12 @@ function missingHome(dive: Doc): never {
 	throw new Error(`dive ${String(dive.fm.name)}'s home, the branch it was jumped from, is gone: recreate it, as \`git branch <name> <commit>\``);
 }
 
+/** The paths of the dives a feat links `dives.feat`. */
+function diveLinks(doc: Doc): string[] {
+	const links = Array.isArray(doc.fm.links) ? doc.fm.links : [];
+	return links.flatMap((entry) => Object.entries((entry ?? {}) as Record<string, { rel?: unknown } | null>).filter(([, value]) => value?.rel === "dives.feat").map(([target]) => target));
+}
+
 /** Why `next` would not list a feat: it is durable, or it has children, dives included; nothing when it is a non-durable leaf (sure-off-fringe). */
 function offFringe(hero: Hero, doc: Doc, ctx: Ctx): string | undefined {
 	const kind = docKind(doc, hero.id);
@@ -252,7 +266,7 @@ function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): voi
 	const scopes: unknown[] = readScopes(hero, feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
 	const { owner, pin } = diveKind(hero, ctx);
 	if (owner !== hero.id) scopes.push({ [owner]: { canonical: true, ...pin } });
-	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `A dive on ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
+	const minted = mintKbDoc(dir, { kind: "dive", id, name, gist: `An attempt to complete ${String(feat.fm.name)}`, title: name, meta: { feat: String(feat.fm.id) } });
 	const doc = heroDoc(hero, minted.id)!;
 	doc.yaml.set("scopes", scopes);
 	writeKbDoc(doc.path, doc.yaml, doc.body);
