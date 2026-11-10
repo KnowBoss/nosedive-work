@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
+import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { fixture, git } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
@@ -85,6 +86,35 @@ test("refuses a second dive while on a dive branch or holding one, a doc that is
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), before, "nothing recorded");
 	assert.equal(git(f.checkout, "status", "--porcelain"), "?? draft.md", "its checkout is the diver's to change");
 });
+
+for (const outcome of ["landed", "bailed"] as const) {
+	test(`a ${outcome} dive is refused on every path, before anything changes: by its quid, as a leftover branch's dive, and on that branch`, async () => {
+		const f = fixture(`jump-over-${outcome}`);
+		await jump({ ref: f.featId }, f.ctx);
+		const id = f.onDeck();
+		const branch = branchOf(f, id);
+		f.commit("idea.md", "an idea\n");
+		if (outcome === "landed") await land({}, f.ctx);
+		else await bail({ reason: "a test" }, f.ctx);
+		const over = `dive ideas\\.${id.slice(-6)} is over: it ${outcome}`;
+		await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`${over}$`), "named by its quid, no branch left");
+
+		const leave = new RegExp(`${over}; to leave its branch, switch to its home, main, the branch it was jumped from, and delete ${branch}$`);
+		const refusedAsWas = async (args: { ref?: string }) => {
+			const on = git(f.hero, "symbolic-ref", "--short", "HEAD");
+			const tip = git(f.hero, "rev-parse", branch);
+			const scope = git(f.checkout, "rev-parse", "HEAD");
+			await assert.rejects(jump(args, f.ctx), leave);
+			assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), on, "the hero's branch unchanged");
+			assert.equal(git(f.hero, "rev-parse", branch), tip, "the leftover branch where it was");
+			assert.equal(git(f.checkout, "rev-parse", "HEAD"), scope, "the scope checkout where it was");
+		};
+		git(f.hero, "branch", "-q", branch, "HEAD");
+		await refusedAsWas({ ref: id });
+		git(f.hero, "switch", "-q", branch);
+		await refusedAsWas({});
+	});
+}
 
 test("a dive minted from another clone sharing the home's upstream is found once fetched, and refused as held there; a dirty hero is refused before anything", async () => {
 	const f = fixture("jump-stale");
