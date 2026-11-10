@@ -42,6 +42,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	if (deck && deckDoc && isWorkDive(deckDoc)) {
 		// On a dive branch, only its dive: set up again, losing nothing (one-dive-branch-per-checkout).
 		if (typeof args.ref === "string" && args.ref !== deck.diveId) throw new Error(`the hero is on dive ${named(deckDoc)}'s branch: pack, land or bail it first`);
+		refuseOver(hero, deckDoc, on, deck.token);
 		target = deckDoc;
 		token = deck.token;
 		home = homeOf(hero, token) ?? missingHome(deckDoc);
@@ -73,6 +74,7 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (branches.length > 0 && !mine) throw new Error(`this checkout has dive branch ${branches[0]!.branch}: switch to it, then pack, land or bail it first`);
 		if (mine) {
 			// Its own dive's branch, left by hand: back onto it, as on a dive branch.
+			refuseOver(hero, target, mine.branch, mine.token);
 			const switched = runGit(hero.dir, "checkout", "-q", mine.branch);
 			if (!switched.ok) throw new Error(`cannot put the hero on ${mine.branch}: ${switched.text}`);
 			token = mine.token;
@@ -220,6 +222,14 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	ctx.out(`dive  ${shown(dive.path)}`);
 	if (feat) ctx.out(`feat  ${shown(feat.path)}`);
 	for (const scope of plan) ctx.out(`${scope.name}  ${shown(scope.dir)}`);
+}
+
+/** Refuses a dive that is over, landed or bailed, whose branch is still in this checkout, saying how to leave it. */
+function refuseOver(hero: Hero, dive: Doc, branch: string, token: string): void {
+	const { outcome } = metaOf(dive);
+	if (!outcome) return;
+	const home = homeOf(hero, token);
+	throw new Error(`dive ${String(dive.fm.name)} is over: it ${outcome}; to leave its branch, switch to its home${home ? `, ${home}` : ""}, the branch it was jumped from, and delete ${branch}`);
 }
 
 function missingHome(dive: Doc): never {
