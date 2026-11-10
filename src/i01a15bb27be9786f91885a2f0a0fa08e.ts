@@ -488,16 +488,29 @@ export function readOnlyRefusals(dive: Dive): string[] {
 /** One repo a dive's work is put down from: a writable scope's checkout, or the hero. */
 type Put = { key: string; name: string; dir: string; base: string; recorded: string | undefined; commits: string[]; sha?: string };
 
+/** The dive's refs in a repo's local refs, deleted once it is put down. */
+function localDiveRefs(dir: string, diveId: string): { ref: string; sha: string }[] {
+	return runGit(dir, "for-each-ref", "--format=%(refname)%09%(objectname)", "refs/nosedive")
+		.text.split("\n")
+		.filter(Boolean)
+		.map((line) => {
+			const [ref, sha] = line.split("\t") as [string, string];
+			return { ref, sha };
+		})
+		.filter(({ ref }) => isDiveRef(ref, diveId));
+}
+
 /**
- * Puts a dive down, for pack and bail: uncommitted work committed, each repo's work pushed to the dive's ref with a
- * lease against what the dive last saw, checkouts left detached at their base, the hero switched back to its home and
- * its dive branch deleted. Returns each repo's commits and the ref values to record.
+ * Puts a dive down, for pack and bail: uncommitted work committed, every destination ref published before old refs are
+ * deleted under individual leases, checkouts left detached at their base, the hero switched back to its home and its
+ * dive branch deleted. A remote failure leaves local branches in place for a safe retry.
  */
 export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<string, string | undefined>; own: string } {
 	const { hero, home } = dive;
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
 	const up = homeUpstream(hero, home);
+	// Fetched so every dive ref's commit is here: diveRefs orders them by commit time.
 	fetchUpstream(hero, up);
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
@@ -506,11 +519,19 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 		{ key: hero.id!, name: "hero", dir: hero.dir, base: `refs/heads/${home}`, recorded: heroRef(hero, dive.doc), commits: [] },
 	];
 
-	// Every lease is checked before anything is committed or pushed.
+	// Every lease is checked before anything is committed or pushed, against what the dive doc recorded at its last jump
+	// or pack: local refs are no record, since any fetch into a repo's shared cache moves them. Each ref must hold the
+	// recorded commit or older work of the dive; the dive's own ref may also hold a commit this checkout has, its own
+	// earlier publish, so a retry goes on.
 	const observed = new Map(puts.map((put) => [put.key, diveRefs(put.dir, id)]));
+	const within = (dir: string, sha: string, tip: string | undefined) => tip !== undefined && runGit(dir, "merge-base", "--is-ancestor", sha, tip).ok;
 	const moved = puts.flatMap((put) => {
-		const newest = observed.get(put.key)![0];
-		return newest?.sha === put.recorded ? [] : [`${put.name}: ${newest ? `${newest.ref} is at ${newest.sha.slice(0, 7)}` : "the dive's ref is gone"}, which this dive did not see`];
+		const current = observed.get(put.key)!;
+		if (current.length === 0 && put.recorded !== undefined) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
+		return current.flatMap(({ ref, sha }) => {
+			if (within(put.dir, sha, put.recorded) || (ref === own && within(put.dir, sha, "HEAD"))) return [];
+			return [`${put.name}: ${ref} is at ${sha.slice(0, 7)}, which this dive did not see`];
+		});
 	});
 	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
 
@@ -521,21 +542,37 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 			if (!committed.ok) throw new Error(`cannot commit ${put.name}'s uncommitted work: ${committed.text}`);
 		}
 		put.commits = runGit(put.dir, "log", "--format=%h %s", put.base + "..HEAD").text.split("\n").filter(Boolean);
-		const refs = observed.get(put.key)!;
-		const leases = refs.flatMap(({ ref, sha }) => [`--force-with-lease=${ref}:${sha}`, ...(ref === own && put.commits.length > 0 ? [] : [`:${ref}`])]);
-		if (put.commits.length > 0) {
-			if (!refs.some(({ ref }) => ref === own)) leases.push(`--force-with-lease=${own}:`);
-			leases.push(`HEAD:${own}`);
-		}
-		if (leases.length > 0) {
-			const pushed = runGit(put.dir, "push", "-q", "--atomic", "origin", ...leases);
-			if (!pushed.ok) throw new Error(`cannot push ${put.name}'s work to ${own}: ${pushed.text}`);
-		}
-		for (const { ref } of refs) if (ref !== own) runGit(put.dir, "update-ref", "-d", ref);
 		if (put.commits.length > 0) {
 			put.sha = runGit(put.dir, "rev-parse", "HEAD").text;
-			runGit(put.dir, "update-ref", own, put.sha);
-		} else runGit(put.dir, "update-ref", "-d", own);
+		}
+	}
+
+	// Publish every destination first, each leased against what was just checked, so a race after the check is refused.
+	for (const put of puts) {
+		if (!put.sha) continue;
+		const destination = observed.get(put.key)!.find(({ ref }) => ref === own);
+		if (destination?.sha === put.sha) continue;
+		const pushed = runGit(put.dir, "push", "-q", `--force-with-lease=${own}:${destination?.sha ?? ""}`, "origin", `HEAD:${own}`);
+		if (!pushed.ok) throw new Error(`cannot push ${put.name}'s work to ${own}: ${pushed.text}`);
+	}
+
+	for (const put of puts) {
+		const refs = observed.get(put.key)!;
+		const deleting = (put.sha ? refs.filter(({ ref }) => ref !== own) : [...refs].reverse());
+		for (const { ref, sha } of deleting) {
+			const removed = runGit(put.dir, "push", "-q", `--force-with-lease=${ref}:${sha}`, "origin", `:${ref}`);
+			if (!removed.ok) throw new Error(`cannot delete ${put.name}'s ref ${ref}: ${removed.text}`);
+		}
+		const remaining = diveRefs(put.dir, id);
+		if (put.sha ? remaining.length !== 1 || remaining[0]?.ref !== own || remaining[0]?.sha !== put.sha : remaining.length > 0) {
+			const unexpected = remaining.find(({ ref, sha }) => ref !== own || sha !== put.sha);
+			throw new Error(`cannot finish cleaning ${put.name}'s dive refs${unexpected ? `: ${unexpected.ref} is at ${unexpected.sha.slice(0, 7)}` : ""}`);
+		}
+	}
+
+	for (const put of puts) {
+		for (const { ref } of localDiveRefs(put.dir, id)) runGit(put.dir, "update-ref", "-d", ref);
+		if (put.sha) runGit(put.dir, "update-ref", own, put.sha);
 	}
 
 	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, featOf(dive.doc), scope);
