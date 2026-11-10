@@ -11,14 +11,14 @@ import { WORK_ID } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i012ea2e903345c02b1cc8786221f93cd as after } from "./i012ea2e903345c02b1cc8786221f93cd.ts";
 
 /** A hero with a second feat, read-only on data, and a dive on the first as crud mints one, committed. */
-function briefed(label: string) {
+function briefed(label: string, name = (_dive: string) => "ideas.briefed") {
 	const f = fixture(label);
 	const dir = join(f.hero, dirname(git(f.hero, "ls-files", `*${f.featId}.md`)));
 	const [dive, other] = [mintUuid(), mintUuid()];
 	writeFileSync(join(dir, `${other}.md`), `---\nkind: memo\nid: ${other}\nname: other\ngist: "Other"\nscopes:\n  - ${f.repoId}\n---\n\n# Other\n`);
 	writeFileSync(
 		join(dir, `${dive}.md`),
-		`---\nkind: dive\nid: ${dive}\nname: ideas.briefed\ngist: "Address review comments"\nscopes:\n  - ${WORK_ID}:\n      canonical: true\nmeta:\n  feat: ${f.featId}\n---\n\n# Briefed\n\n## Brief\n\nRead the comments.\n`,
+		`---\nkind: dive\nid: ${dive}\nname: ${name(dive)}\ngist: "Address review comments"\nscopes:\n  - ${WORK_ID}:\n      canonical: true\nmeta:\n  feat: ${f.featId}\n---\n\n# Briefed\n\n## Brief\n\nRead the comments.\n`,
 	);
 	git(f.hero, "add", "-A");
 	git(f.hero, "commit", "-q", "-m", "briefed");
@@ -42,7 +42,7 @@ test("a dive crud mints gets its feat's scopes, its canonical entry kept, and it
 	await run();
 	assert.match(read(dive), new RegExp(`scopes:\\n {2}- ${WORK_ID}:\\n {6}canonical: true\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`));
 	assert.match(read(dive), /\n## Brief\n\nRead the comments\.$/, "its brief untouched");
-	assert.match(read(dive), new RegExp(`\\nname: ideas\\.${dive.slice(-6)}\\n`), "named after its feat");
+	assert.match(read(dive), new RegExp(`\\nname: ${dive.slice(-6)}\\.ideas\\n`), "named after its feat");
 	assert.match(read(dive), /\ngist: "Address review comments"\n/);
 	assert.match(read(f.featId), new RegExp(`- [^\\n]*${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
 });
@@ -54,6 +54,12 @@ test("a dive not yet jumped moves to another feat's scopes and link", async () =
 	assert.doesNotMatch(read(dive), /work-branch/, "read-only on data, as the other feat is");
 	assert.match(read(dive), new RegExp(`- ${f.repoId}`));
 	assert.doesNotMatch(read(f.featId), new RegExp(dive), "the old feat no longer links it");
-	assert.match(read(dive), new RegExp(`\\nname: other\\.${dive.slice(-6)}\\n`), "renamed after the new feat");
+	assert.match(read(dive), new RegExp(`\\nname: ${dive.slice(-6)}\\.other\\n`), "renamed after the new feat");
 	assert.match(read(other), new RegExp(`${dive}\\.md:\\n {6}rel: dives\\.feat\\n`));
+});
+
+test("a dive named feat first on its feat, as dives were before names went hex first, keeps its name", async () => {
+	const { dive, read, run } = briefed("dive-shape-old-name", (id) => `ideas.${id.slice(-6)}`);
+	await run();
+	assert.match(read(dive), new RegExp(`\\nname: ideas\\.${dive.slice(-6)}\\n`), "not renamed");
 });

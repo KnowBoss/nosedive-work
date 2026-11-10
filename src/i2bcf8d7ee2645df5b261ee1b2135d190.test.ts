@@ -27,7 +27,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	git(f.hero, "commit", "-q", "-m", "a note");
 	await pack({}, f.ctx);
 	git(f.remote, "update-ref", `refs/nosedive/dives/${f.heroId}/main/${id}`, git(f.checkout, "rev-parse", "HEAD"));
-	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^pack\(ideas\.[0-9a-f]{6}\): diver@example\.com put it down$/);
+	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^pack\([0-9a-f]{6}\.ideas\): diver@example\.com put it down$/);
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive, "pack's record says nosedive made it");
 	await jump({ ref: id }, f.ctx);
 
@@ -38,7 +38,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)"), trailers);
 	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD~2"), `Co-Authored-By: nosedive 0.0.1 <noreply@nosedive.dev>\nNosedive-Dive: ${id}\nNosedive-Feat: ${f.featId}`, "a commit that has a nosedive co-author gets no second");
 	assert.equal(git(f.checkout, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD~1"), `Co-Authored-By: Ann <ann@example.com>\n${trailers}`, "another's does not stand in for it");
-	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^land\(ideas\.[0-9a-f]{6}\): diver@example\.com landed it$/);
+	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^land\([0-9a-f]{6}\.ideas\): diver@example\.com landed it$/);
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), nosedive);
 	assert.equal(git(f.checkout, "log", "-1", "--format=%s"), "add idea.md");
 	assert.equal(git(f.checkout, "log", "-1", "--format=%an %ae %aI"), author, "the same author");
@@ -47,7 +47,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	const trunk = git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), trunk, "the hero's work and record are on trunk");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD^"), trailers, "the hero's work is stamped too");
-	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD~2"), /^jump\(ideas\.[0-9a-f]{6}\): /, "bookended by the jump and land records");
+	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD~2"), /^jump\([0-9a-f]{6}\.ideas\): /, "bookended by the jump and land records");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main", "the hero back home");
 	assert.equal(git(f.hero, "branch", "--list", `nosedive-*-${id}`), "", "its dive branch gone");
 	assert.match(f.doc(id), new RegExp(`\\nmeta:\\n {2}feat: [0-9a-f-]{36}\\n {2}outcome: landed\\n[^]*\\n## \\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z landed\\n\\ndiver@example\\.com landed it\\.\\n\\n- data: pushed ${head.slice(0, 7)} to work/ideas\\n- hero: 1 commit onto main\\n$`));

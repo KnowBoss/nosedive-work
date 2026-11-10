@@ -29,7 +29,8 @@ export async function i012ea2e903345c02b1cc8786221f93cd(ctx: GateCtx): Promise<v
 		ctx.crud(from, "links", { [key]: null });
 	}
 	ctx.crud(feat.id, "links", { [key]: { rel: "dives.feat" } });
-	// A dive is named after its feat, as jump names one (dive-names-derived).
-	const name = `${String(feat.fm.name)}.${doc.id.slice(-6)}`;
-	if (after.fm.name !== name) ctx.crud(doc.id, "name", name);
+	// A dive is named after its feat, hex first, as jump names one (dive-names-derived); one named before that, on this feat, keeps its name (dive-name-hex-first).
+	const name = `${doc.id.slice(-6)}.${String(feat.fm.name)}`;
+	const old = !moved && after.fm.name === `${String(feat.fm.name)}.${doc.id.slice(-6)}`;
+	if (after.fm.name !== name && !old) ctx.crud(doc.id, "name", name);
 }

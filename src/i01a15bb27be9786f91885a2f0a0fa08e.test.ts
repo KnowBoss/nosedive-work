@@ -22,11 +22,11 @@ test("refuses off a dive branch, then gives the dive the hero's branch names, it
 		[{ repoId: f.repoId, name: "data", trunk: "main", branch: "work/ideas", ours: true }],
 	);
 	assert.equal(diveOnDeck(hero, f.ctx, f.onDeck()).doc.fm.id, f.onDeck());
-	assert.throws(() => diveOnDeck(hero, f.ctx, f.featId), new RegExp(`the dive on deck is ideas\\.[0-9a-f]{6} \\(${f.onDeck()}\\), not ${f.featId}`));
+	assert.throws(() => diveOnDeck(hero, f.ctx, f.featId), new RegExp(`the dive on deck is [0-9a-f]{6}\\.ideas \\(${f.onDeck()}\\), not ${f.featId}`));
 
 	// A copy of the dive branch is another branch: the diver's token is the home's, which no other home shares.
 	git(f.hero, "branch", "-m", "main", "renamed");
-	assert.throws(() => diveOnDeck(hero, f.ctx), /dive ideas\.[0-9a-f]{6}'s home, the branch it was jumped from, is gone: recreate it/);
+	assert.throws(() => diveOnDeck(hero, f.ctx), /dive [0-9a-f]{6}\.ideas's home, the branch it was jumped from, is gone: recreate it/);
 	git(f.hero, "branch", "-m", "renamed", "main");
 });
 
@@ -71,7 +71,7 @@ test("a dive's diver is <email>#<token>, the token a digest of the checkout's pa
 test("crud groups a commit on the dive branch under the dive its branch names, which core reads as a feat", async () => {
 	const f = fixture("dive-holder-feat");
 	await jump({ ref: f.featId }, f.ctx);
-	assert.equal(featNameOf(findBridge(f.hero)!, []), `ideas.${f.onDeck().slice(-6)}`);
+	assert.equal(featNameOf(findBridge(f.hero)!, []), `${f.onDeck().slice(-6)}.ideas`);
 });
 
 test("a dive's work in progress is told by its name, in the subject pack writes now, or either it wrote before", async () => {
