@@ -46,7 +46,7 @@ test("work another email packed is taken over only --sure, its work in progress 
 	await pack({}, f.ctx);
 
 	git(f.hero, "config", "user.email", "taker@example.com");
-	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ideas\\.${id.slice(-6)} was packed by diver@example\\.com: jump it --sure to take it over, its work in progress included \\(take-over-with-sure\\)`));
+	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ${id.slice(-6)}\\.ideas was packed by diver@example\\.com: jump it --sure to take it over, its work in progress included \\(take-over-with-sure\\)`));
 	await jumpSure({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id);
 	assert.equal(readFileSync(join(f.checkout, "half.md"), "utf8"), "half done\n", "their work in progress, uncommitted again");

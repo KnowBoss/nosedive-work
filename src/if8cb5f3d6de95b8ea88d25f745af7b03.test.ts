@@ -1,6 +1,6 @@
 // jump [<ref>]
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
@@ -14,6 +14,8 @@ import { diveBranch, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 /** The dive branch a dive jumped from the hero's main has. */
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
+/** What jump ends with, naming the dive's brief (jump-starts-the-work). */
+const nudge = (brief: string) => `Now do the dive's work, from its brief, ${brief}, to its feat's Done when; pack or land it only when the pilot asks.`;
 
 test("a feat the root reaches gets a dive with its scopes, naming the feat and linked from it as dives.feat, the hero and its scope on its dive branch, held by this checkout, its bookkeeping on the home it was jumped from", async () => {
 	const f = fixture("jump-feat");
@@ -21,7 +23,7 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	const id = f.onDeck();
 	const dive = f.doc(id);
 	const trunk = git(f.remote, "rev-parse", "main");
-	assert.match(dive, new RegExp(`^---\\nkind: dive\\nid: ${id}\\nname: ideas\\.${id.slice(-6)}\\n`));
+	assert.match(dive, new RegExp(`^---\\nkind: dive\\nid: ${id}\\nname: ${id.slice(-6)}\\.ideas\\n`));
 	assert.match(dive, new RegExp(`scopes:\\n {2}- ${f.repoId}:\\n {6}work-branch: work/ideas\\n`));
 	assert.match(dive, new RegExp(`\\nmeta:\\n {2}feat: ${f.featId}\\n {2}diver: diver@example\\.com#[0-9a-f]{12}\\n`));
 	assert.doesNotMatch(dive, /\nlinks:/, "a dive links nothing back");
@@ -31,11 +33,43 @@ test("a feat the root reaches gets a dive with its scopes, naming the feat and l
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branchOf(f, id), "and the hero");
 	assert.equal(git(f.hero, "rev-parse", "main"), git(f.hero, "rev-parse", "HEAD"), "cut from its home after the jump record");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), trunk, "with no work branch yet, it starts at trunk");
-	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^jump\(ideas\.[0-9a-f]{6}\): diver@example\.com picked it up$/, "the command first, then the dive it acted on");
+	assert.match(git(f.hero, "log", "-1", "--format=%s"), /^jump\([0-9a-f]{6}\.ideas\): diver@example\.com picked it up$/, "the command first, then the dive it acted on");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)"), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "which says nosedive made it, once");
 	assert.equal(git(f.hero, "status", "--porcelain"), "", "the feat's link rides the same commit");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], "the bookkeeping pushed to the home's upstream");
-	assert.deepEqual(f.out.slice(-3), [`dive  kb/${id}.md`, `feat  kb/${f.featId}.md`, "data  workspace/data"]);
+	assert.deepEqual(f.out.slice(-4), [`dive  kb/${id}.md`, `feat  kb/${f.featId}.md`, "data  workspace/data", nudge(`kb/${f.featId}.md`)], "the feat its brief, as it was jumped bare");
+});
+
+test("jump's usage, which --help --more prints, says what it does with uncommitted changes and that it ends with the nudge", () => {
+	const body = readFileSync(new URL("../kb/01a15bb2-736b-7eac-84a7-3389e72d9590.md", import.meta.url), "utf8");
+	const usage = /(?:^|\n)## Usage\n([\s\S]*?)(?=\n## |$)/.exec(body)![1]!;
+	assert.match(usage, /off a dive branch, an unclean hero tree is refused \(jump-needs-clean-tree\)/);
+	assert.match(usage, /a scope checkout jump would move that has uncommitted changes or untracked files is refused, each named, before anything moves/);
+	assert.match(usage, /A checkout already where the dive wants it, as on a dive branch, is left as it is/);
+	assert.match(usage, /pack's work-in-progress commit on this dive is undone, so packed work comes back uncommitted/);
+	assert.match(usage, /to do the dive's work now, from its brief to its feat's Done when, and to pack or land it only when the pilot asks/);
+});
+
+test("a dive named feat first, as dives were before names went hex first, is jumped by its quid and keeps its name, and every jump ends with the nudge naming its brief", async () => {
+	const f = fixture("jump-old-name");
+	const id = f.plan();
+	const old = `ideas.${id.slice(-6)}`;
+	await jump({ ref: id }, f.ctx);
+	assert.equal(f.onDeck(), id);
+	assert.match(f.doc(id), new RegExp(`\\nname: ${old.replace(".", "\\.")}\\n`), "its name kept");
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), `jump(${old}): diver@example.com picked it up`);
+	assert.equal(f.out.at(-1), nudge(`kb/${id}.md`), "a planned dive its own brief");
+
+	f.out.length = 0;
+	await jump({}, f.ctx);
+	assert.equal(f.out.at(-1), nudge(`kb/${id}.md`), "on its branch too");
+
+	writeFileSync(join(f.checkout, "draft.md"), "draft\n");
+	await pack({}, f.ctx);
+	f.out.length = 0;
+	await jump({ ref: `kb/${id}.md` }, f.ctx);
+	assert.equal(git(f.checkout, "status", "--porcelain"), "?? draft.md", "its old-named work in progress undone");
+	assert.equal(f.out.at(-1), nudge(`kb/${id}.md`), "and resumed");
 });
 
 test("takes a doc's path as next prints it, a feat's or a dive's, for its quid (listed-paths-accepted)", async () => {
@@ -64,7 +98,7 @@ test("refuses a second dive while on a dive branch or holding one, a doc that is
 	await assert.rejects(jump({ ref: f.repoId }, f.ctx), /data is no feat: nothing reaches it from a root of the hero through a .feat link; link it from a feat first/);
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
-	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), new RegExp(`the hero is on dive ideas\\.${id.slice(-6)} \\(${id}\\)'s branch: pack, land or bail it first`));
+	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), new RegExp(`the hero is on dive ${id.slice(-6)}\\.ideas \\(${id}\\)'s branch: pack, land or bail it first`));
 
 	// Off its dive branch, the checkout still holds it: only that dive can be jumped.
 	git(f.hero, "switch", "-q", "main");
@@ -75,9 +109,9 @@ test("refuses a second dive while on a dive branch or holding one, a doc that is
 	const other = join(f.hero, "..", "other-checkout");
 	git(f.hero, "worktree", "add", "-q", "-b", "other", other, "main");
 	git(other, "branch", "-q", "-u", "origin/main");
-	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: other }), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com in another checkout of the hero: pack it there \\(held-by-checkout\\)`));
+	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: other }), new RegExp(`dive ${id.slice(-6)}\\.ideas is held by diver@example\\.com in another checkout of the hero: pack it there \\(held-by-checkout\\)`));
 	git(f.hero, "config", "user.email", "other@example.com");
-	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: other }), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com \\(held-by-checkout\\)$`));
+	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: other }), new RegExp(`dive ${id.slice(-6)}\\.ideas is held by diver@example\\.com \\(held-by-checkout\\)$`));
 	git(f.hero, "config", "user.email", "diver@example.com");
 
 	const before = git(f.hero, "rev-parse", "HEAD");
@@ -96,7 +130,7 @@ for (const outcome of ["landed", "bailed"] as const) {
 		f.commit("idea.md", "an idea\n");
 		if (outcome === "landed") await land({}, f.ctx);
 		else await bail({ reason: "a test" }, f.ctx);
-		const over = `dive ideas\\.${id.slice(-6)} is over: it ${outcome}`;
+		const over = `dive ${id.slice(-6)}\\.ideas is over: it ${outcome}`;
 		await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`${over}$`), "named by its quid, no branch left");
 
 		const leave = new RegExp(`${over}; to leave its branch, switch to its home, main, the branch it was jumped from, and delete ${branch}$`);
@@ -129,7 +163,7 @@ test("a dive minted from another clone sharing the home's upstream is found once
 	writeFileSync(join(f.hero, "scratch.md"), "mine\n");
 	await assert.rejects(jump({ ref: id }, f.ctx), /the hero has uncommitted changes, and jump switches its branch: commit them first \(jump-needs-clean-tree\)/);
 	git(f.hero, "clean", "-qf");
-	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ideas\\.${id.slice(-6)} is held by diver@example\\.com in another checkout of the hero: pack it there`));
+	await assert.rejects(jump({ ref: id }, f.ctx), new RegExp(`dive ${id.slice(-6)}\\.ideas is held by diver@example\\.com in another checkout of the hero: pack it there`));
 	assert.equal(git(f.hero, "rev-parse", "main"), git(other, "rev-parse", "main"), "main fast-forwarded to the other clone's record");
 });
 
@@ -179,7 +213,7 @@ test("replays the dive's hero work on its bookkeeping, and refuses while the hom
 
 	await jump({ ref: id }, f.ctx);
 	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "a note");
-	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD^"), /^jump\(ideas\.[0-9a-f]{6}\): diver@example\.com picked it up$/);
+	assert.match(git(f.hero, "log", "-1", "--format=%s", "HEAD^"), /^jump\([0-9a-f]{6}\.ideas\): diver@example\.com picked it up$/);
 	assert.equal(git(f.hero, "status", "--porcelain"), "?? kb/draft.md", "uncommitted again");
 	assert.match(f.doc(id), /\n- hero: 2 commits replayed\n$/);
 
@@ -310,7 +344,7 @@ test("a dive jumped from a pushed branch keeps every record and its hero work th
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	assert.equal(git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], trunk, "trunk on origin never moved");
-	assert.match(git(f.hero, "log", "-1", "--format=%s", "origin/spec"), /^jump\(ideas\./, "the record is on the home's upstream");
+	assert.match(git(f.hero, "log", "-1", "--format=%s", "origin/spec"), /^jump\([0-9a-f]{6}\.ideas\)/, "the record is on the home's upstream");
 	writeFileSync(join(f.hero, "NOTE.md"), "hero work\n");
 	git(f.hero, "add", "NOTE.md");
 	git(f.hero, "commit", "-q", "-m", "hero note");
@@ -321,7 +355,7 @@ test("a dive jumped from a pushed branch keeps every record and its hero work th
 	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "hero note", "replayed on the dive branch");
 	await land({}, f.ctx);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "spec");
-	assert.deepEqual(git(f.hero, "log", "-3", "--format=%s", "origin/spec").split("\n").map((line) => line.split(":")[0]), [`land(ideas.${id.slice(-6)})`, "hero note", `jump(ideas.${id.slice(-6)})`], "the hero's work bookended on the home's upstream");
+	assert.deepEqual(git(f.hero, "log", "-3", "--format=%s", "origin/spec").split("\n").map((line) => line.split(":")[0]), [`land(${id.slice(-6)}.ideas)`, "hero note", `jump(${id.slice(-6)}.ideas)`], "the hero's work bookended on the home's upstream");
 	assert.equal(git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], trunk, "and still not on trunk");
 });
 

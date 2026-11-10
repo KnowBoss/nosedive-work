@@ -222,6 +222,9 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 	ctx.out(`dive  ${shown(dive.path)}`);
 	if (feat) ctx.out(`feat  ${shown(feat.path)}`);
 	for (const scope of plan) ctx.out(`${scope.name}  ${shown(scope.dir)}`);
+	// The agent that jumped does the work, but puts it down only on the pilot's say (jump-starts-the-work).
+	const brief = /(?:^|\n)## Brief\n/.test(dive.body) || !feat ? dive : feat;
+	ctx.out(`Now do the dive's work, from its brief, ${shown(brief.path)}, to its feat's Done when; pack or land it only when the pilot asks.`);
 }
 
 /** Refuses a dive that is over, landed or bailed, whose branch is still in this checkout, saying how to leave it. */
@@ -275,7 +278,7 @@ function switchTo(dir: string, local: string, workBranch: string, trunk: string)
 
 /** Mints a dive on a feat, its scopes the feat's, naming its feat and linked from it. */
 function mintDive(hero: Hero, dir: string, feat: Doc, id: string, ctx: Ctx): void {
-	const name = `${String(feat.fm.name)}.${id.slice(-6)}`;
+	const name = `${id.slice(-6)}.${String(feat.fm.name)}`;
 	const scopes: unknown[] = readScopes(hero, feat).map((entry) => ({ [entry.repoId]: entry.branch ? { "work-branch": entry.branch } : {} }));
 	const { owner, pin } = diveKind(hero, ctx);
 	if (owner !== hero.id) scopes.push({ [owner]: { canonical: true, ...pin } });
