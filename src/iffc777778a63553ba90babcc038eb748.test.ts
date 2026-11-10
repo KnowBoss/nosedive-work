@@ -36,6 +36,19 @@ test("needs a reason", async () => {
 	await assert.rejects(bail({ reason: " " }, f.ctx), /bail needs a reason/);
 });
 
+test("bails without atomic-push support at the origin", async () => {
+	const f = fixture("bail-no-atomic");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const committed = f.commit("idea.md", "an idea\n");
+	git(f.remote, "config", "receive.advertiseAtomic", "false");
+
+	await bail({ reason: "no longer needed" }, f.ctx);
+
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed);
+	assert.throws(() => f.onDeck());
+});
+
 test("bail's usage binds --reason as reason, the key bail reads (bail-reason-binding)", async () => {
 	const { i01a1335482437c9eb145885f65f12aa1: matchUsage } = await import("nosedive-core");
 	assert.equal(matchUsage(["bail [<dive>] --reason <why>"], ["bail", "--reason", "gone stale"]).args.reason, "gone stale");
