@@ -224,7 +224,7 @@ test("a turn the upstream refuses, as a protected trunk does, is kept and warned
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const base = git(f.hero, "rev-parse", "main");
 	const hook = join(origin, "hooks", "pre-receive");
-	writeFileSync(hook, "#!/bin/sh\necho protected >&2\nexit 1\n");
+	writeFileSync(hook, "#!/bin/sh\necho protected >&2\nexit 1\n", { mode: 0o755 });
 	assert.equal(await f.run(["Refused.", "--label", "First"]), 0, f.err.join("\n"));
 	assert.match(f.err.join("\n"), /warning: the turn is on main but not pushed to origin\/main: .*protected.*; the next turn, pack or land pushes it/);
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "nothing reached the upstream");
