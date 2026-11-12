@@ -1,0 +1,57 @@
+name: Work CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  work:
+    name: Work (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Configure Git for test fixtures
+        run: |
+          git config --global core.autocrlf false
+          git config --global user.name "Work CI"
+          git config --global user.email work-ci@nosedive.invalid
+      - uses: actions/checkout@v5
+        with:
+          path: nosedive-work
+          fetch-depth: 0
+          persist-credentials: false
+      # Work's tsconfig finds core beside it, as nosedive-core; its tests run with that core.
+      - uses: actions/checkout@v5
+        with:
+          repository: KnowBoss/nosedive-core
+          path: nosedive-core
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Build core
+        working-directory: nosedive-core
+        run: |
+          npm ci
+          npm run build
+      - name: Install
+        working-directory: nosedive-work
+        run: npm ci
+      - name: Typecheck
+        working-directory: nosedive-work
+        run: npm run typecheck
+      - name: Test
+        working-directory: nosedive-work
+        run: node ../nosedive-core/dist/cli.js pass --test 01a15bb1-da9e-7d2d-aa82-5ee97257adc6
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}

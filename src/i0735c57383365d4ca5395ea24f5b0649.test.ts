@@ -18,7 +18,7 @@ while read old new ref; do
   fi
 done
 exit 0
-`);
+`, { mode: 0o755 });
 	return hook;
 }
 
@@ -195,7 +195,7 @@ while read old new ref; do
     git update-ref "${legacy}" "$new"
   fi
 done
-`);
+`, { mode: 0o755 });
 
 	await assert.rejects(pack({}, f.ctx), (error: unknown) => {
 		assert.match(String(error), new RegExp(legacy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
