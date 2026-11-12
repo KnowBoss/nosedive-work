@@ -200,7 +200,9 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		if (!switched.ok) throw new Error(`cannot put the hero on ${branch}: ${switched.text}`);
 		if (heroPacked && !runGit(hero.dir, "merge-base", "--is-ancestor", heroPacked, "HEAD").ok) {
 			const since = runGit(hero.dir, "merge-base", heroPacked, "HEAD").text;
-			const picked = runGit(hero.dir, "cherry-pick", "--allow-empty", `${since}..${heroPacked}`);
+			// A turn the pack carried is on the home already, as its own commit there: `cherry` marks it `-`, and it is left out.
+			const fresh = runGit(hero.dir, "cherry", "HEAD", heroPacked, since).text.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2));
+			const picked = fresh.length === 0 ? { ok: true, text: "" } : runGit(hero.dir, "cherry-pick", "--allow-empty", ...fresh);
 			if (!picked.ok) {
 				runGit(hero.dir, "cherry-pick", "--abort");
 				throw new Error(`the dive's packed hero work conflicts with ${home}, so the hero is on ${branch} without it: it stays on ${heroPacked.slice(0, 7)}, to cherry-pick by hand\n${picked.text}`);

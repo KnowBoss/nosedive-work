@@ -11,6 +11,10 @@ export async function i16b8d55a332958f3b47989994ca5c52c(ctx: GateCtx): Promise<v
 	if (!before) return;
 	const name = String(before.fm.name);
 	const meta = metaOf(before);
+	// A held dive's doc changes only through turn, pack, land and bail, none of which runs crud's gates (held-dive-doc-edits).
+	if (after && typeof meta.diver === "string" && meta.diver && meta.outcome === undefined) {
+		throw new Error(`dive ${name} is held by ${meta.diver.split("#")[0]}, so its doc changes only through the loop: record a turn with \`pass --turn\` instead, or pack it first`);
+	}
 	if (!after) {
 		if (meta.outcome !== undefined) return;
 		if (typeof meta.diver === "string" && meta.diver) {

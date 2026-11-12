@@ -126,10 +126,16 @@ export function fetchUpstream(hero: Hero, up: Upstream): void {
 	runGit(hero.dir, "fetch", "-q", "--prune", "origin", "+refs/nosedive/*:refs/nosedive/*");
 }
 
-/** Brings a home up to its upstream, as last fetched: fast-forwarded when behind; refused while it holds commits the upstream lacks. */
-export function syncHome(hero: Hero, home: string, up: Upstream): void {
+/**
+ * Brings a home up to its upstream, as last fetched: fast-forwarded when behind; refused while it holds commits the upstream
+ * lacks, unless `aheadOk`: a dive being put down or landed pushes them with its record, a turn that could not be pushed among them.
+ */
+export function syncHome(hero: Hero, home: string, up: Upstream, aheadOk = false): void {
 	const ahead = runGit(hero.dir, "rev-list", "--count", `${up.ref}..refs/heads/${home}`).text;
-	if (ahead !== "0") throw new Error(`${home} holds ${ahead} commit${ahead === "1" ? "" : "s"} ${up.remote}/${up.name} lacks: push ${ahead === "1" ? "it" : "them"} first`);
+	if (ahead !== "0") {
+		if (aheadOk) return;
+		throw new Error(`${home} holds ${ahead} commit${ahead === "1" ? "" : "s"} ${up.remote}/${up.name} lacks: push ${ahead === "1" ? "it" : "them"} first; a turn that could not be pushed is one, which the next turn, pack or land of its dive pushes`);
+	}
 	if (runGit(hero.dir, "rev-list", "--count", `refs/heads/${home}..${up.ref}`).text === "0") return;
 	const checkedOut = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === home;
 	if (checkedOut) runGit(hero.dir, "merge", "-q", "--ff-only", up.ref);
@@ -589,7 +595,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const switched = runGit(hero.dir, "checkout", "-q", home);
 	if (!switched.ok) throw new Error(`cannot switch the hero back to ${home}: ${switched.text}`);
 	runGit(hero.dir, "branch", "-q", "-D", dive.branch);
-	syncHome(hero, home, up);
+	syncHome(hero, home, up, true);
 	return { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 }
 
@@ -616,5 +622,73 @@ export function pushRecord(hero: Hero, record: () => void): void {
 			runGit(hero.dir, "rebase", "--abort");
 			throw new Error(`the hero's work conflicts with ${up.remote}/${up.name} as it moved: ${rebased.text}`);
 		}
+	}
+}
+
+/** What became of a turn's copy on the dive's home: pushed, kept there unpushed, or left on the dive branch alone. */
+export type TurnOutcome = { kind: "pushed"; sha: string; to: string } | { kind: "unpushed"; why: string; to: string } | { kind: "dive-branch-only"; why: string };
+
+/** The lines of git's complaint that say what went wrong, hints and the remote's name left out. */
+function complaint(text: string): string {
+	return text.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("hint:") && !line.startsWith("To ")).slice(0, 2).join("; ");
+}
+
+/**
+ * Makes `commit`'s change on `onto` without a checkout: `merge-tree` for the merged tree, a commit from it with the commit's
+ * message, author, committer and dates, and `onto` itself when it holds the change already. The merge's words when it conflicts.
+ */
+function pick(dir: string, commit: string, onto: string): { sha: string } | { conflict: string } {
+	const merged = spawnSync("git", ["merge-tree", "--write-tree", `--merge-base=${commit}^`, onto, commit], { cwd: dir, encoding: "utf8" });
+	if (merged.status !== 0) return { conflict: complaint(merged.stdout.split("\n").filter((line) => /conflict/i.test(line)).join("\n") || merged.stderr || "merge-tree failed") };
+	const tree = merged.stdout.split("\n")[0]!.trim();
+	if (tree === runGit(dir, "rev-parse", `${onto}^{tree}`).text) return { sha: onto };
+	const [an, ae, ad, cn, ce, cd] = runGit(dir, "log", "-1", "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI", commit).text.split("\0") as string[];
+	// The raw message, as `log` would add a newline of its own.
+	const raw = spawnSync("git", ["cat-file", "commit", commit], { cwd: dir, encoding: "utf8" }).stdout;
+	const message = raw.slice(raw.indexOf("\n\n") + 2);
+	const env = { ...process.env, GIT_AUTHOR_NAME: an, GIT_AUTHOR_EMAIL: ae, GIT_AUTHOR_DATE: ad, GIT_COMMITTER_NAME: cn, GIT_COMMITTER_EMAIL: ce, GIT_COMMITTER_DATE: cd };
+	const made = spawnSync("git", ["commit-tree", tree, "-p", onto], { cwd: dir, encoding: "utf8", input: message, env });
+	if (made.status !== 0) return { conflict: `commit-tree failed: ${made.stderr.trim()}` };
+	return { sha: made.stdout.trim() };
+}
+
+/**
+ * Puts a turn's commit, which pass made on the dive branch, on the dive's home and pushes the home to its upstream
+ * (turn-reaches-home-how): the home is not checked out, so its ref moves and no file does. Pushed with whatever a failed
+ * turn left unpushed beneath it, and nothing else; when the upstream moved, the home's unpushed commits are taken onto
+ * its new tip and pushed again, as pushRecord does. A conflict, or a home another worktree has checked out, leaves the home as it was.
+ */
+export function putTurnOnHome(hero: Hero, home: string, commit: string): TurnOutcome {
+	const dir = hero.dir;
+	const ref = `refs/heads/${home}`;
+	const elsewhere = runGit(dir, "worktree", "list", "--porcelain").text.split("\n").some((line) => line.trim() === `branch ${ref}`);
+	if (elsewhere) return { kind: "dive-branch-only", why: `${home} is checked out in another worktree, which a moved branch would leave confused` };
+	const before = runGit(dir, "rev-parse", ref).text;
+	const first = pick(dir, commit, before);
+	if ("conflict" in first) return { kind: "dive-branch-only", why: `it conflicts with ${home}: ${first.conflict}` };
+	runGit(dir, "update-ref", ref, first.sha, before);
+	const up = upstreamOf(hero, home);
+	if (!up) return { kind: "unpushed", why: `${home} has no upstream`, to: home };
+	const to = `${up.remote}/${up.name}`;
+	for (let tries = 0; ; tries++) {
+		const pushed = runGit(dir, "push", "-q", up.remote, `${ref}:refs/heads/${up.name}`);
+		if (pushed.ok) {
+			runGit(dir, "update-ref", up.ref, ref);
+			return { kind: "pushed", sha: runGit(dir, "rev-parse", "--short", ref).text, to };
+		}
+		const fetched = runGit(dir, "fetch", "-q", up.remote, `+refs/heads/${up.name}:${up.ref}`);
+		const moved = fetched.ok && !runGit(dir, "merge-base", "--is-ancestor", up.ref, ref).ok;
+		if (!moved || tries === 2) return { kind: "unpushed", why: complaint(pushed.text), to };
+		// Moved: what the home holds above the upstream goes on its new tip, this turn's copy last.
+		let tip = runGit(dir, "rev-parse", up.ref).text;
+		for (const sha of runGit(dir, "rev-list", "--reverse", `${up.ref}..${ref}`).text.split("\n").filter(Boolean)) {
+			const next = pick(dir, sha, tip);
+			if ("conflict" in next) {
+				runGit(dir, "update-ref", ref, before);
+				return { kind: "dive-branch-only", why: `it conflicts with ${to} as it moved: ${next.conflict}` };
+			}
+			tip = next.sha;
+		}
+		runGit(dir, "update-ref", ref, tip);
 	}
 }
