@@ -221,7 +221,7 @@ test("replays the dive's hero work on its bookkeeping, and refuses while the hom
 	git(f.hero, "commit", "-q", "-m", "a draft");
 	await land({}, f.ctx);
 	git(f.hero, "commit", "-q", "--allow-empty", "-m", "stray");
-	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks: push it first/);
+	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks: push it first; a turn that could not be pushed is one, which the next turn, pack or land of its dive pushes/);
 });
 
 test("moves a checkout left from other work, keeping commits origin lacks on an orphan ref, and refuses one with uncommitted changes", async () => {

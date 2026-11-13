@@ -24,3 +24,11 @@ test("a dive held or packed is not dropped; one over, one never jumped, or a min
 	await before({ before: state({ feat: "a" }) } as never);
 	await before({ after: state({ feat: "a" }) } as never);
 });
+
+test("any edit of a held dive is refused, saying to record a turn or pack it; a packed, over or unjumped one is edited", async () => {
+	const held = state({ feat: "a", diver: "diver@example.com#0123456789ab" });
+	await assert.rejects(before({ before: held, after: state({ feat: "a", diver: "diver@example.com#0123456789ab" }) } as never), /dive ideas\.briefed is held by diver@example\.com, so its doc changes only through the loop: record a turn with `pass --turn` instead, or pack it first/);
+	for (const meta of [{ feat: "a", diver: null, packer: "diver@example.com" }, { feat: "a", diver: "diver@example.com#0123456789ab", outcome: "landed" }, { feat: "a" }]) {
+		await before({ before: state(meta), after: state(meta) } as never);
+	}
+});
