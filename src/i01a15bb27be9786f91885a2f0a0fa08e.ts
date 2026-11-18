@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
@@ -243,12 +243,24 @@ export function stamp(dir: string, range: string[], trailers: string[]): number 
 	return shas.length;
 }
 
-/** The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace. */
+/**
+ * The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace.
+ * None under a link either: on Windows git lists the files inside a junction as if they were the checkout's own.
+ */
 function keepable(hero: Hero, dir: string): string[] {
 	const isSpared = spared(hero, dir);
+	const linked = new Map<string, boolean>();
+	const isLink = (path: string) => {
+		if (!linked.has(path)) linked.set(path, lstatSync(join(dir, path)).isSymbolicLink());
+		return linked.get(path)!;
+	};
+	const underLink = (file: string) => {
+		const parts = file.split("/");
+		return parts.slice(0, -1).some((_, i) => isLink(parts.slice(0, i + 1).join("/")));
+	};
 	return runGit(dir, "ls-files", "--others", "--ignored", "--exclude-standard")
 		.text.split("\n")
-		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file));
+		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file) && !underLink(file));
 }
 
 /** Whether a path in a checkout lies under a workspace it holds, its repo's own or the hero's, which jump and pack never touch. */
