@@ -1,12 +1,13 @@
 // pack [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
-import { fixture, git } from "../test/harness.ts";
+import { unzipSync } from "fflate";
+import { fixture, git, tempDir } from "../test/harness.ts";
 
 function rejectDelete(remote: string, ref: string): string {
 	const hook = join(remote, "hooks", "pre-receive");
@@ -81,6 +82,27 @@ test("never packs or clears a workspace the checkout's own config names, nor the
 	await jump({ ref: id }, f.ctx);
 	assert.equal(readFileSync(join(f.checkout, "workspace", "notes.md"), "utf8"), "kept\n", "and jump leaves it alone");
 	assert.equal(existsSync(join(f.checkout, "workspace", "nested", ".git")), true);
+});
+
+test("never packs or clears files reached through an ignored junction, which git lists as the checkout's own on Windows", async () => {
+	const f = fixture("pack-junction");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	writeFileSync(join(f.checkout, ".gitignore"), "secrets.local\nlinked/\n");
+	f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "KEY=secret\n");
+	const target = tempDir("junction-target");
+	writeFileSync(join(target, "outside.txt"), "not the checkout's\n");
+	// A junction with an absolute target; elsewhere the type is ignored and this is a plain symlink.
+	symlinkSync(target, join(f.checkout, "linked"), "junction");
+
+	await pack({}, f.ctx);
+	const zip = unzipSync(new Uint8Array(readFileSync(join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip"))));
+	assert.deepEqual(Object.keys(zip), ["secrets.local"], "only the checkout's own ignored file is packed");
+	assert.equal(readFileSync(join(target, "outside.txt"), "utf8"), "not the checkout's\n", "the target survives the pack");
+
+	await jump({ ref: id }, f.ctx);
+	assert.equal(readFileSync(join(target, "outside.txt"), "utf8"), "not the checkout's\n", "and the jump's swap");
 });
 
 test("refuses when the dive's ref moved since it was jumped, pushing nothing", async () => {
