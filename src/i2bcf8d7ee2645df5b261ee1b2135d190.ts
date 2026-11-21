@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor, fetchExact, replay, stampRange } from "nosedive-core";
-import type { RemoteUpdate, Sha, Step } from "nosedive-core";
+import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, carry, diveRefs, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -59,7 +59,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(version)];
 		const notes: string[] = [];
 		const steps: Step[] = [];
-		const after: Step[] = [];
+		const after: LocalStep[] = [];
 		const branch = `refs/heads/${dive.branch}`;
 		for (const scope of writable) {
 			const work = found.get(scope.repoId) ?? null;
@@ -108,7 +108,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,
-			remote: { name: up.remote, updates: [homeUpdate(homePlan, made.tip, [...set, made.tip]), ...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false }))] },
+			remote: { name: up.remote, updates: [...heroSeen.map(({ ref, sha }): RemoteUpdate => ({ ref, old: sha, new: null, fastForward: false })), homeUpdate(homePlan, made.tip, [...set, made.tip])] },
 			local: {
 				moves: [
 					{ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip },

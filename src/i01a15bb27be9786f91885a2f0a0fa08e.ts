@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
@@ -9,7 +9,7 @@ import { i01a13dee4b1d78f7a699c3777bf63587 as readRepoConfig } from "nosedive-co
 import { i01a147171f057d019118aaa1f269f5fd as findKind, isDurable } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { CORE_OWNER, featTree } from "nosedive-core";
-import { commitOffside, commitPlan, describeRefusal, docAt, fetchExact, ownedRange, replay, snapshot, type KbDoc, type LocalMove, type Plan, type RemoteUpdate, type Sha, type Step } from "nosedive-core";
+import { commitOffside, commitPlan, describeRefusal, docAt, fetchExact, ownedRange, replay, snapshot, type KbDoc, type LocalMove, type LocalStep, type Plan, type RemoteUpdate, type Sha, type Step } from "nosedive-core";
 import { i01a1901e263b7209a4b5f39a71c568b3 as featWalk } from "nosedive-core";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Change, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
@@ -223,7 +223,8 @@ export function diveWork(dir: string, tip: Sha, old: Sha | null): Set<Sha> {
 
 /** Fetches a repo's branches and nosedive refs from origin. */
 export function fetchAll(dir: string): void {
-	runGit(dir, "fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/nosedive/*:refs/nosedive/*");
+	const fetched = runGit(dir, "fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/nosedive/*:refs/nosedive/*");
+	if (!fetched.ok) throw new Error(`cannot fetch origin in ${dir}, so nothing was planned: ${fetched.text}`);
 }
 
 /** Where a dive's work is kept on each repo's origin, whichever checkout of the hero packs it. */
@@ -301,7 +302,7 @@ export function baseOf(scope: { dir: string; branch?: string; trunk: string }): 
  * The ignored files a pack keeps: all but those an install or a build remakes, and none under a workspace.
  * None under a link either: on Windows git lists the files inside a junction as if they were the checkout's own.
  */
-function keepable(hero: Hero, dir: string): string[] {
+function ignoredFiles(hero: Hero, dir: string, includeRebuildable: boolean): string[] {
 	const isSpared = spared(hero, dir);
 	const linked = new Map<string, boolean>();
 	const isLink = (path: string) => {
@@ -314,7 +315,28 @@ function keepable(hero: Hero, dir: string): string[] {
 	};
 	return runGit(dir, "ls-files", "--others", "--ignored", "--exclude-standard")
 		.text.split("\n")
-		.filter((file) => file && !REBUILDABLE.test(file) && !isSpared(file) && !underLink(file));
+		.filter((file) => file && (includeRebuildable || !REBUILDABLE.test(file)) && !isSpared(file) && !isLink(file) && !underLink(file));
+}
+
+function keepable(hero: Hero, dir: string): string[] {
+	return ignoredFiles(hero, dir, false);
+}
+
+/** Ignored link entries git reaches through on Windows; the entry may move, but its target is never read or removed. */
+function ignoredLinks(hero: Hero, dir: string): string[] {
+	const isSpared = spared(hero, dir);
+	const links = new Set<string>();
+	for (const file of runGit(dir, "ls-files", "--others", "--ignored", "--exclude-standard").text.split("\n").filter(Boolean)) {
+		const parts = file.split("/");
+		for (let i = 0; i < parts.length; i++) {
+			const path = parts.slice(0, i + 1).join("/");
+			try {
+				if (!isSpared(path) && lstatSync(join(dir, path)).isSymbolicLink()) links.add(path);
+			} catch {}
+			if (links.has(path)) break;
+		}
+	}
+	return [...links];
 }
 
 /** Whether a path in a checkout lies under a workspace it holds, its repo's own or the hero's, which jump and pack never touch. */
@@ -346,6 +368,51 @@ export function packIgnored(hero: Hero, featId: string, scope: { name: string; d
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, zipSync(read(scope.dir, files)));
 	return files.length;
+}
+
+/** After publication, atomically moves ignored files into same-filesystem staging, then packs exactly those bytes. */
+function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }, files: string[], packed: string[], links: string[]): number {
+	const path = join(packsDir(hero), featId, `${scope.name}.zip`);
+	if (files.length === 0 && links.length === 0) {
+		rmSync(path, { force: true });
+		return 0;
+	}
+	const staging = mkdtempSync(join(scope.dir, ".nosedive-pack-"));
+	const moved: string[] = [];
+	try {
+		for (const file of files) {
+			const from = join(scope.dir, file);
+			if (!existsSync(from)) continue;
+			const to = join(staging, file);
+			mkdirSync(dirname(to), { recursive: true });
+			renameSync(from, to);
+			moved.push(file);
+		}
+		for (const link of links) {
+			const from = join(scope.dir, link);
+			if (!existsSync(from)) continue;
+			const to = join(staging, link);
+			mkdirSync(dirname(to), { recursive: true });
+			renameSync(from, to);
+		}
+		const captured = packed.filter((file) => moved.includes(file));
+		if (captured.length === 0) rmSync(path, { force: true });
+		else {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, zipSync(read(staging, captured)));
+		}
+		rmSync(staging, { recursive: true, force: true });
+		const dirs = new Set(moved.flatMap((file) => {
+			const parts = file.split("/");
+			return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
+		}));
+		for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
+			try { rmdirSync(join(scope.dir, dir)); } catch {}
+		}
+		return captured.length;
+	} catch (error) {
+		throw new Error(`ignored files were kept in ${staging} because their pack could not be completed: ${(error as Error).message}`);
+	}
 }
 
 /**
@@ -590,8 +657,8 @@ export type PutDown = { puts: Put[]; refs: Map<string, string | undefined>; own:
 
 /**
  * Puts a dive down, for pack and bail, as one plan: uncommitted work held in a commit off to the side, the home replayed,
- * the record built, every conflict found; then each scope and, last, the hero, one atomic push of the record, the dive's
- * ref and the deleted ones, and the local refs after it. The checkouts are left detached at their base and the hero on its
+ * the record built, every conflict found; then each scope and, last, the hero push each ref under its own lease: work first,
+ * deleted refs next and the record last, with local refs after them. The checkouts are left detached at their base and the hero on its
  * home, the dive branches gone, only once every push is done.
  */
 export function putDown(dive: Dive, version: string, command: string, record: (done: PutDown) => Change): Promise<PutDown> {
@@ -640,26 +707,21 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	}
 	const done: PutDown = { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 	const made = recordOn(hero, homePlan.tip, keyOf(hero, dive.doc), record(done), version);
-
-	const ignored = new Map(writable.map((scope) => {
-		const isSpared = spared(hero, scope.dir);
-		return [scope.repoId, runGit(scope.dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").text.split("\n").filter((path) => path && !isSpared(path))];
-	}));
-	for (const scope of dive.scopes.filter((each) => each.ours)) packIgnored(hero, featOf(dive.doc), scope);
+	const ignored = new Map(writable.map((scope) => [scope.repoId, { files: ignoredFiles(hero, scope.dir, true), packed: ignoredFiles(hero, scope.dir, false), links: ignoredLinks(hero, scope.dir) }]));
 
 	const branch = `refs/heads/${dive.branch}`;
 	const steps: Step[] = [];
-	const after: Step[] = [];
+	const after: LocalStep[] = [];
 	for (const put of puts) {
 		const isHero = put.key === hero.id;
 		const seen = observed.get(put.key)!;
 		const updates: RemoteUpdate[] = [];
-		if (isHero) updates.push(homeUpdate(homePlan, made.tip, [made.tip]));
 		if (put.sha) {
 			const there = seen.find(({ ref }) => ref === own);
 			if (there?.sha !== put.sha) updates.push({ ref: own, old: there?.sha ?? null, new: put.sha, fastForward: false, publishes: diveWork(put.dir, put.sha, there?.sha ?? null) });
 		}
 		for (const { ref, sha } of put.sha ? seen.filter((each) => each.ref !== own) : seen) updates.push({ ref, old: sha, new: null, fastForward: false });
+		if (isHero) updates.push(homeUpdate(homePlan, made.tip, [made.tip]));
 		const held = localDiveRefs(put.dir, id);
 		const moves: LocalMove[] = held.map(({ ref, sha }) => ({ ref, old: sha, new: put.sha && ref === own ? put.sha : null }));
 		if (put.sha && !held.some(({ ref }) => ref === own)) moves.push({ ref: own, old: null, new: put.sha });
@@ -676,10 +738,10 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	}
 	carry({ steps, after }, command);
 	for (const scope of writable) {
-		const paths = ignored.get(scope.repoId)!;
-		// What the base does not ignore would read as untracked work; the feat's pack holds what is worth keeping.
-		if (paths.length > 0) runGit(scope.dir, "clean", "-q", "-f", "-d", "--", ...paths);
+		const found = ignored.get(scope.repoId)!;
+		stageAndPackIgnored(hero, featOf(dive.doc), scope, found.files, found.packed, found.links);
 	}
+	for (const scope of dive.scopes.filter((each) => each.ours && !writable.includes(each))) packIgnored(hero, featOf(dive.doc), scope);
 	return done;
 }
 

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { featRoot, isDurable, kingsmetal } from "nosedive-core";
-import type { Args, Ctx, Head, LocalMove, Sha, Step } from "nosedive-core";
+import type { Args, Ctx, Head, LocalMove, LocalStep, Sha, Step } from "nosedive-core";
 import { replay } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
@@ -187,7 +187,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	const lines: string[] = [];
 	const warnings: string[] = [];
 	const moved: Planned[] = [];
-	const after: Step[] = [];
+	const after: LocalStep[] = [];
 	for (const scope of plan) {
 		if (scope.settled) {
 			// A checkout already on its dive branch: pack's work-in-progress commit on it is undone, its work back uncommitted.
