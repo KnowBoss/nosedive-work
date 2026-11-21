@@ -11,7 +11,7 @@ import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { WORK_ID, adoptTrunk, isDive as isWorkDive, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, keyOf, metaOf, openDives, orphan, parseDiveBranch, pushRecord, readScopes, repoDoc, scopesWith, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, adoptTrunk, releaseAdopted, isDive as isWorkDive, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchUpstream, heroBranch, heroDoc, homeOf, homeUpstream, isDiveRef, keyOf, metaOf, openDives, orphan, parseDiveBranch, pushRecord, readScopes, repoDoc, scopesWith, swapIgnored, syncHome, tokenOf, trunkOf, isWip, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive, type Doc, type Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -53,12 +53,18 @@ export async function if8cb5f3d6de95b8ea88d25f745af7b03(args: Args, ctx: Ctx): P
 		home = on;
 		if (runGit(hero.dir, "status", "--porcelain").text) throw new Error("the hero has uncommitted changes, and jump switches its branch: commit them first (jump-needs-clean-tree)");
 		const adopted = adoptTrunk(hero, home);
+		try {
+			const up = homeUpstream(hero, home);
+			// A dive minted or packed from another checkout sharing the home's upstream is there, not yet here.
+			fetchUpstream(hero, up);
+			unpushed = syncHome(hero, home, up);
+			upstream = `${up.remote}/${up.name}`;
+		} catch (error) {
+			// A jump that refuses leaves no upstream it set itself.
+			if (adopted) releaseAdopted(hero, home);
+			throw error;
+		}
 		if (adopted) ctx.out(adopted);
-		const up = homeUpstream(hero, home);
-		// A dive minted or packed from another checkout sharing the home's upstream is there, not yet here.
-		fetchUpstream(hero, up);
-		unpushed = syncHome(hero, home, up);
-		upstream = `${up.remote}/${up.name}`;
 		token = tokenOf(hero, home);
 		const holder = `${me}#${token}`;
 		const open = openDives(hero);

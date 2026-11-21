@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchUpstream, heroDoc, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, deleteRefs, diveRefs, durableFeat, emailOf, featOf, fetchUpstream, heroDoc, checkHome, homeUpstream, packIgnored, pushRecord, readOnlyRefusals, scopesWith, stamp, syncHome } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27d7c72258e54d02070189892 as recordDive } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -20,9 +20,9 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	// The hero's work goes home, the branch the dive was jumped from, which must be its upstream's (records-on-jumped-branch).
 	const { home } = dive;
 	const up = homeUpstream(hero, home);
-	fetchUpstream(hero, up);
 	try {
-		syncHome(hero, home, up);
+		fetchUpstream(hero, up);
+		checkHome(hero, home, up);
 	} catch (error) {
 		refused.push((error as Error).message);
 	}
@@ -38,6 +38,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		}
 	}
 	if (refused.length > 0) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
+	// The home's commits nosedive made go first, replayed and pushed, so the dive's hero work is rebased onto what is published.
+	syncHome(hero, home, up);
 
 	const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(ctx.capes[0]!.version)];
 	const lines: string[] = [];
