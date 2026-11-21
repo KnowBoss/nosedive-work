@@ -120,26 +120,66 @@ export function homeUpstream(hero: Hero, home: string): Upstream {
 	return up;
 }
 
+/** Adopts origin's trunk as a home's upstream when it has none and shares history with it, as a branch cut from it does however far it moved since, saying so; nothing otherwise, which homeUpstream refuses (jump-home-without-upstream). */
+export function adoptTrunk(hero: Hero, home: string): string | undefined {
+	if (upstreamOf(hero, home)) return undefined;
+	const trunk = originTrunk(hero.dir);
+	if (!runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`).ok) return undefined;
+	if (!runGit(hero.dir, "merge-base", `refs/remotes/origin/${trunk}`, `refs/heads/${home}`).ok) return undefined;
+	runGit(hero.dir, "config", `branch.${home}.remote`, "origin");
+	runGit(hero.dir, "config", `branch.${home}.merge`, `refs/heads/${trunk}`);
+	return `jump: ${home} had no upstream; set it to origin/${trunk}, which it is cut from`;
+}
+
 /** Fetches a branch's upstream, and the nosedive refs from origin. */
 export function fetchUpstream(hero: Hero, up: Upstream): void {
 	runGit(hero.dir, "fetch", "-q", up.remote, `+refs/heads/${up.name}:${up.ref}`);
 	runGit(hero.dir, "fetch", "-q", "--prune", "origin", "+refs/nosedive/*:refs/nosedive/*");
 }
 
+/** The committer of every commit nosedive makes by itself, which is how a commit is told to be its own. */
+const NOSEDIVE_COMMITTER = { GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" };
+
+/** The commits in a range, oldest first, with whether nosedive committed each. */
+function commitsIn(dir: string, range: string): { sha: string; subject: string; own: boolean }[] {
+	return runGit(dir, "log", "--reverse", "--format=%H%x00%cn%x00%ce%x00%s", range)
+		.text.split("\n")
+		.filter(Boolean)
+		.map((line) => {
+			const [sha, name, email, subject] = line.split("\0") as [string, string, string, string];
+			return { sha, subject, own: name === NOSEDIVE_COMMITTER.GIT_COMMITTER_NAME && email === NOSEDIVE_COMMITTER.GIT_COMMITTER_EMAIL };
+		});
+}
+
+/** The home's commits its upstream lacks; refused, rewriting nothing, when any is not nosedive's. */
+export function refuseForeign(hero: Hero, home: string, up: Upstream) {
+	const ahead = commitsIn(hero.dir, `${up.ref}..refs/heads/${home}`);
+	const others = ahead.filter((commit) => !commit.own);
+	if (others.length > 0) throw new Error(`${home} holds ${others.length} commit${others.length === 1 ? "" : "s"} ${up.remote}/${up.name} lacks that nosedive did not commit: push or drop ${others.length === 1 ? "it" : "them"} first:\n  ${others.map((commit) => `${commit.sha.slice(0, 7)} ${commit.subject}`).join("\n  ")}`);
+	return ahead;
+}
+
 /**
- * Brings a home up to its upstream, as last fetched: fast-forwarded when behind; refused while it holds commits the upstream
- * lacks, unless `aheadOk`: a dive being put down or landed pushes them with its record, a turn that could not be pushed among them.
+ * Brings a home up to its upstream, as last fetched: fast-forwarded when behind. The commits it holds that the upstream lacks
+ * are published with a dive's record, but only when nosedive committed every one; then they are replayed onto the upstream
+ * if it moved, nosedive still their committer, and returned as `<sha> <subject>`. Otherwise it is refused, and nothing is
+ * rewritten, as when a replay conflicts (jump-publishes-nosedive-committed).
  */
-export function syncHome(hero: Hero, home: string, up: Upstream, aheadOk = false): void {
-	const ahead = runGit(hero.dir, "rev-list", "--count", `${up.ref}..refs/heads/${home}`).text;
-	if (ahead !== "0") {
-		if (aheadOk) return;
-		throw new Error(`${home} holds ${ahead} commit${ahead === "1" ? "" : "s"} ${up.remote}/${up.name} lacks: push ${ahead === "1" ? "it" : "them"} first; a turn that could not be pushed is one, which the next turn, pack or land of its dive pushes`);
-	}
-	if (runGit(hero.dir, "rev-list", "--count", `refs/heads/${home}..${up.ref}`).text === "0") return;
+export function syncHome(hero: Hero, home: string, up: Upstream): string[] {
+	const ref = `refs/heads/${home}`;
+	const ahead = refuseForeign(hero, home, up);
+	const upstream = `${up.remote}/${up.name}`;
 	const checkedOut = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === home;
-	if (checkedOut) runGit(hero.dir, "merge", "-q", "--ff-only", up.ref);
-	else runGit(hero.dir, "update-ref", `refs/heads/${home}`, up.ref);
+	if (runGit(hero.dir, "rev-list", "--count", `${ref}..${up.ref}`).text === "0") return ahead.map((commit) => `${commit.sha.slice(0, 7)} ${commit.subject}`);
+	let tip = runGit(hero.dir, "rev-parse", up.ref).text;
+	for (const commit of ahead) {
+		const next = pick(hero.dir, commit.sha, tip);
+		if ("conflict" in next) throw new Error(`the ${ahead.length} commit${ahead.length === 1 ? "" : "s"} nosedive made on ${home} conflict${ahead.length === 1 ? "s" : ""} with ${upstream} as it moved, so nothing was rewritten: push or drop ${ahead.length === 1 ? "it" : "them"} first: ${next.conflict}`);
+		tip = next.sha;
+	}
+	if (checkedOut) runGit(hero.dir, "reset", "-q", "--hard", tip);
+	else runGit(hero.dir, "update-ref", ref, tip);
+	return commitsIn(hero.dir, `${up.ref}..${ref}`).map((commit) => `${commit.sha.slice(0, 7)} ${commit.subject}`);
 }
 
 /** Fetches a repo's branches and nosedive refs from origin. */
@@ -209,7 +249,12 @@ export function orphan(hero: Hero, dir: string): { ref: string; commits: string[
 export function trunkOf(repo: Doc, dir: string): string {
 	const trunk = (repo.fm.meta as { trunk?: unknown } | undefined)?.trunk;
 	if (typeof trunk === "string") return trunk;
-	return (existsSync(dir) && runGit(dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "")) || "main";
+	return existsSync(dir) ? originTrunk(dir) : "main";
+}
+
+/** The branch origin's HEAD named when last fetched, else main. */
+function originTrunk(dir: string): string {
+	return runGit(dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").text.replace(/^origin\//, "") || "main";
 }
 
 /** Where a scope's work starts: its work branch on origin when there is one, else trunk. */
@@ -530,6 +575,8 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const up = homeUpstream(hero, home);
 	// Fetched so every dive ref's commit is here: diveRefs orders them by commit time.
 	fetchUpstream(hero, up);
+	// A home commit that is not nosedive's is refused before anything is pushed (jump-publishes-nosedive-committed).
+	refuseForeign(hero, home, up);
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
 	const puts: Put[] = [
@@ -607,7 +654,7 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const switched = runGit(hero.dir, "checkout", "-q", home);
 	if (!switched.ok) throw new Error(`cannot switch the hero back to ${home}: ${switched.text}`);
 	runGit(hero.dir, "branch", "-q", "-D", dive.branch);
-	syncHome(hero, home, up, true);
+	syncHome(hero, home, up);
 	return { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 }
 
@@ -629,7 +676,10 @@ export function pushRecord(hero: Hero, record: () => void): void {
 		runGit(hero.dir, "reset", "-q", "--hard", "HEAD^");
 		if (tries === 2) throw new Error(`cannot push the hero's record to ${up.remote}/${up.name}: ${pushed.text}`);
 		fetchUpstream(hero, up);
-		const rebased = runGit(hero.dir, "rebase", "-q", up.ref);
+		// What it carries stays nosedive's to publish only if nosedive stays its committer, which a rebase would otherwise take.
+		const own = commitsIn(hero.dir, `${up.ref}..HEAD`).every((commit) => commit.own);
+		const replayed = spawnSync("git", ["rebase", "-q", up.ref], { cwd: hero.dir, encoding: "utf8", env: own ? { ...process.env, ...NOSEDIVE_COMMITTER } : process.env });
+		const rebased = { ok: replayed.status === 0, text: (replayed.stderr || replayed.stdout || "").trim() };
 		if (!rebased.ok) {
 			runGit(hero.dir, "rebase", "--abort");
 			throw new Error(`the hero's work conflicts with ${up.remote}/${up.name} as it moved: ${rebased.text}`);

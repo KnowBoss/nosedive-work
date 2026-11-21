@@ -118,7 +118,7 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		 * Plans a dive on the feat as `crud work:dive <gist> --meta:feat <feat> --section:Brief -` would, dive-shape scoping, naming
 		 * and linking it: committed on the hero's main and pushed. Returns its id.
 		 */
-		plan(gist = "Do the next part"): string {
+		plan(gist = "Do the next part", unpushed = false): string {
 			const id = mintUuid();
 			const repoScope = options.readOnly ? `  - ${repoId}: {}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
 			const scopes = `scopes:\n  - 01a15bb1-da9e-7d2d-aa82-5ee97257adc6:\n      canonical: true\n${repoScope}`;
@@ -129,8 +129,10 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 			feat.yaml.set("links", [...links, { [`${docs}/${id}.md`]: { rel: "dives.feat" } }]);
 			writeKbDoc(featPath, feat.yaml, feat.body);
 			git(hero, "add", "-A");
-			git(hero, "commit", "-q", "-m", "plan a dive");
-			git(hero, "push", "-q", "origin", "HEAD:main");
+			// As crud commits it when unpushed: on this branch only, nosedive the committer.
+			const env = unpushed ? { ...process.env, GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" } : process.env;
+			spawnSync("git", ["commit", "-q", "-m", "plan a dive"], { cwd: hero, env });
+			if (!unpushed) git(hero, "push", "-q", "origin", "HEAD:main");
 			return id;
 		},
 	};

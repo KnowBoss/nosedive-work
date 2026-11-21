@@ -8,7 +8,7 @@ import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
-import { fixture, git } from "../test/harness.ts";
+import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { diveBranch, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
@@ -221,7 +221,7 @@ test("replays the dive's hero work on its bookkeeping, and refuses while the hom
 	git(f.hero, "commit", "-q", "-m", "a draft");
 	await land({}, f.ctx);
 	git(f.hero, "commit", "-q", "--allow-empty", "-m", "stray");
-	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks: push it first; a turn that could not be pushed is one, which the next turn, pack or land of its dive pushes/);
+	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks that nosedive did not commit: push or drop it first:\n {2}[0-9a-f]{7} stray$/);
 });
 
 test("moves a checkout left from other work, keeping commits origin lacks on an orphan ref, and refuses one with uncommitted changes", async () => {
@@ -326,11 +326,72 @@ function newSchema(f: ReturnType<typeof fixture>): string {
 	return version;
 }
 
-test("refuses a home with no upstream, so no record is stranded in a local branch", async () => {
+test("refuses a home with no upstream that is not cut from origin's trunk, so no record is stranded in a local branch", async () => {
 	const f = fixture("jump-upstream");
-	git(f.hero, "switch", "-q", "-c", "local-only");
+	git(f.hero, "switch", "-q", "--orphan", "local-only");
+	git(f.hero, "checkout", "main", "--", ".");
+	git(f.hero, "commit", "-q", "--allow-empty", "-m", "unrelated");
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), /local-only has no upstream, so the dive's records would be stranded here: push it first, as `git push -u origin local-only`$/);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "local-only", "nothing moved");
+});
+
+/** Another clone of the hero's origin pushes a commit to main, so the upstream moves. */
+function moveUpstream(f: ReturnType<typeof fixture>): string {
+	const other = tempDir("jump-other");
+	git(other, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(other, "clone");
+	writeFileSync(join(clone, "other.md"), "moved\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "upstream moved");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	return git(clone, "rev-parse", "HEAD");
+}
+
+test("a fresh worktree branch with no upstream, a plan commit nosedive made and an upstream that moved, is jumped with no hand git: trunk adopted, the commit replayed and published with the record", async () => {
+	const f = fixture("jump-fresh");
+	git(f.hero, "switch", "-q", "-c", "worktree-agent");
+	const id = f.plan("Do the fresh part", true);
+	const moved = moveUpstream(f);
+	await jump({ ref: id }, f.ctx);
+
+	assert.equal(git(f.hero, "config", "branch.worktree-agent.merge"), "refs/heads/main");
+	assert.match(f.out.join("\n"), /jump: worktree-agent had no upstream; set it to origin\/main, which it is cut from\n/);
+	assert.match(f.out.join("\n"), /jump: published 1 commit nosedive made on worktree-agent to origin\/main with its record:\n[0-9a-f]{7} plan a dive\n/);
+	const published = git(f.hero, "rev-parse", "worktree-agent");
+	assert.equal(git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], published, "published, the record on top");
+	assert.deepEqual(git(f.hero, "log", "--format=%s", `${moved}..${published}`).split("\n"), [`jump(ideas.${id.slice(-6)}): diver@example.com picked it up`, "plan a dive"]);
+	assert.equal(git(f.hero, "log", "-1", "--format=%cn <%ce>", "worktree-agent^"), "nosedive <noreply@nosedive.dev>", "the replayed commit keeps nosedive as committer");
+	assert.equal(git(f.hero, "log", "-1", "--format=%an", "worktree-agent^"), "Work Test", "and its author");
+});
+
+test("a home commit a person made is refused and listed, with nothing rewritten or published, even beside nosedive's", async () => {
+	const f = fixture("jump-hand");
+	git(f.hero, "switch", "-q", "-c", "worktree-agent");
+	const id = f.plan("Do the hand part", true);
+	git(f.hero, "commit", "-q", "--allow-empty", "-m", "by hand");
+	const before = git(f.hero, "rev-parse", "worktree-agent");
+	const tip = moveUpstream(f);
+	await assert.rejects(jump({ ref: id }, f.ctx), /worktree-agent holds 1 commit origin\/main lacks that nosedive did not commit: push or drop it first:\n {2}[0-9a-f]{7} by hand$/);
+	assert.equal(git(f.hero, "rev-parse", "worktree-agent"), before, "nothing rewritten");
+	assert.equal(git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0], tip, "nothing published");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "worktree-agent", "nothing moved");
+});
+
+test("a replay that conflicts with the moved upstream rewrites nothing and publishes nothing", async () => {
+	const f = fixture("jump-conflict");
+	git(f.hero, "switch", "-q", "-c", "worktree-agent");
+	const id = f.plan("Do the conflicting part", true);
+	const other = tempDir("jump-other");
+	git(other, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(other, "clone");
+	const planned = join(clone, "kb", `${id}.md`);
+	writeFileSync(planned, "someone else's\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "same file");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	const before = git(f.hero, "rev-parse", "worktree-agent");
+	await assert.rejects(jump({ ref: id }, f.ctx), /the 1 commit nosedive made on worktree-agent conflicts with origin\/main as it moved, so nothing was rewritten: push or drop it first/);
+	assert.equal(git(f.hero, "rev-parse", "worktree-agent"), before);
 });
 
 test("a dive jumped from a pushed branch keeps every record and its hero work there, trunk untouched, and the loop returns to it", async () => {
