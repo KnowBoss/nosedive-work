@@ -210,23 +210,17 @@ test("a stale per-ref lease stops cleanup after publication and keeps local work
 	git(f.remote, "update-ref", legacy, oldTip);
 	await jump({ ref: id }, f.ctx);
 	const target = f.commit("more.md", "more work\n");
-	const hook = join(f.remote, "hooks", "post-receive");
-	writeFileSync(hook, `#!/bin/sh
-while read old new ref; do
-  if [ "$ref" = "${own}" ]; then
-    git update-ref "${legacy}" "$new"
-  fi
-done
-`, { mode: 0o755 });
+	// Another checkout moves the legacy ref to a commit of its own while the push is on its way.
+	const remote = f.remote.replace(/\\/g, "/");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	writeFileSync(hook, `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\nG="git --git-dir=${remote}"\n$G update-ref "${legacy}" $(echo moved | $G -c user.name=Other -c user.email=other@example.com commit-tree $($G rev-parse refs/heads/main^{tree}))\nexit 0\n`, { mode: 0o755 });
 
 	await assert.rejects(pack({}, f.ctx), (error: unknown) => {
 		assert.match(String(error), new RegExp(legacy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-		assert.match(String(error), /stale info|expected|cannot lock ref/i);
 		return true;
 	});
-
-	assert.equal(f.remoteRef(own), target, "the destination was published first");
-	assert.equal(f.remoteRef(legacy), target, "the concurrent update was not deleted");
+	assert.equal(f.remoteRef(own), oldTip, "the push is atomic: the destination was not published without the deletion");
+	assert.notEqual(f.remoteRef(legacy), "", "the concurrent update was not deleted");
 	assert.equal(f.onDeck(), id, "the dive branch remains active");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), target, "scope work remains on its local branch");
 	unlinkSync(hook);
@@ -264,7 +258,7 @@ test("retries after partial cleanup across a scope and the hero", async () => {
 	assert.equal(f.remoteRef(dataA), "", "scope cleanup completed before the hero failure");
 	assert.equal(f.remoteRef(dataZ), "");
 	assert.equal(git(heroRemote, "rev-parse", heroLegacy), heroOriginal, "the failed deletion remains");
-	assert.equal(git(heroRemote, "rev-parse", `refs/nosedive/${f.heroId}/dives/${id}`), heroTarget);
+	assert.equal(git(heroRemote, "for-each-ref", `refs/nosedive/${f.heroId}/dives/${id}`), "", "the hero's push is atomic: its dive ref and record landed with the deletion or not at all");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), heroTarget, "hero work remains recoverable");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), dataTarget, "scope work remains recoverable");
 	assert.equal(f.onDeck(), id);
