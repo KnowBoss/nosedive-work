@@ -244,7 +244,8 @@ test("a turn whose merge conflicts with the home leaves the home as it was, stay
 	git(f.hero, "worktree", "add", "-q", tree, "main");
 	const path = join(tree, "kb", `${f.id}.md`);
 	writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()} Changed by hand.\n`);
-	git(tree, "commit", "-qam", "by hand");
+	// By nosedive's hand, so it is the conflict that refuses the turn, not whose commit it is.
+	git(tree, "-c", "user.name=nosedive", "-c", "user.email=noreply@nosedive.dev", "commit", "-qam", "by hand");
 	git(f.hero, "worktree", "remove", "--force", tree);
 	const home = git(f.hero, "rev-parse", "main");
 

@@ -12,7 +12,7 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
 import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { diveBranch, pushRecord, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { diveBranch, fetchUpstream, pushRecord, putTurnOnHome, syncHome, tokenOf, upstreamOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 /** The dive branch a dive jumped from the hero's main has. */
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
@@ -611,8 +611,9 @@ function alike(dir: string, file: string, text: string): void {
 test("a record's retry carries a commit approved at the start and publishes once the upstream moved", () => {
 	const f = fixture("record-retry");
 	alike(f.hero, "a.md", "mine\n");
+	const carried = new Set([git(f.hero, "rev-parse", "HEAD")]);
 	other(f).push("z.md", "z\n");
-	pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record"));
+	pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record"), carried);
 	assert.equal(originMain(f), git(f.hero, "rev-parse", "HEAD"));
 	assert.deepEqual(git(f.hero, "log", "--format=%s", "-3").split("\n"), ["record", "alike", "upstream moved"]);
 });
@@ -626,6 +627,7 @@ test("a record's retry refuses a commit that only looks like an approved one, an
 	git(f.hero, "fetch", "-q", "origin");
 	git(f.hero, "merge", "-q", "--ff-only", "origin/main");
 	alike(f.hero, "a2.md", "mine\n");
+	const carried = new Set([git(f.hero, "rev-parse", "HEAD")]);
 	// The upstream is rewound and moves on, so the look-alike is in the range again.
 	git(clone.dir, "reset", "-q", "--hard", base);
 	writeFileSync(join(clone.dir, "z.md"), "z\n");
@@ -633,7 +635,7 @@ test("a record's retry refuses a commit that only looks like an approved one, an
 	git(clone.dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "z");
 	git(clone.dir, "push", "-q", "--force", "origin", "HEAD:main");
 	const moved = originMain(f);
-	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /main now holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record"), carried), /main now holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
 	assert.equal(originMain(f), moved, "nothing pushed");
 });
 
@@ -642,4 +644,202 @@ test("a record is not dropped when HEAD is no longer it", () => {
 	other(f).push("z.md", "z\n");
 	assert.throws(() => pushRecord(findBridge(f.hero)!, () => { own(f.hero, "r.md", "r\n", "record"); own(f.hero, "s.md", "s\n", "more"); }), /moved while its record was being pushed, so nothing was changed/);
 	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "more", "the commits are left where they are");
+});
+
+// Publishing is concurrency safe (jump-publish-is-concurrency-safe)
+
+/**
+ * Makes each push to `main` from `dir` run a step first, as a pre-push hook does, so a test can have the world change while
+ * the push is in flight: the first push runs `steps[0]`, the second `steps[1]`, and any later one nothing. A step is shell.
+ */
+function raceOnMain(dir: string, steps: string[]): void {
+	const state = tempDir("race");
+	const slash = (path: string) => path.replace(/\\/g, "/");
+	steps.forEach((step, i) => writeFileSync(join(state, `step${i + 1}.sh`), `${step}\n`));
+	const hook = join(git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const script = [
+		"#!/bin/sh",
+		'input=$(cat)',
+		'case "$input" in *" refs/heads/main "*) ;; *) exit 0;; esac',
+		`n=$(cat "${slash(state)}/n" 2>/dev/null || echo 0)`,
+		"n=$((n+1))",
+		`echo $n > "${slash(state)}/n"`,
+		`[ -f "${slash(state)}/step$n.sh" ] || exit 0`,
+		"unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE",
+		`sh "${slash(state)}/step$n.sh" >/dev/null 2>&1`,
+		"exit 0",
+		"",
+	].join("\n");
+	writeFileSync(hook, script);
+	chmodSync(hook, 0o755);
+}
+
+const sh = (path: string) => path.replace(/\\/g, "/");
+const PERSON = `git -c user.name=Other -c user.email=other@example.com`;
+
+test("pack and bail meet a replay conflict that only shows on a push retry before anything is torn down", async () => {
+	const puts = [(ctx: F["ctx"]) => pack({}, ctx), (ctx: F["ctx"]) => bail({ reason: "a test" }, ctx)];
+	for (const put of puts) {
+		const f = fixture("jump-retry-conflict");
+		await jump({ ref: f.featId }, f.ctx);
+		const dive = git(f.hero, "symbolic-ref", "--short", "HEAD");
+		f.commit("idea.md", "an idea\n");
+		git(f.hero, "checkout", "-q", "main");
+		own(f.hero, "clash.md", "mine\n", "a turn");
+		git(f.hero, "checkout", "-q", dive);
+		// Nothing clashes when pack looks; the remote moves with a clash once its push is on the way.
+		const clone = other(f);
+		raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\necho theirs > clash.md\ngit add -A\n${PERSON} commit -q -m clash\ngit push -q origin HEAD:main`]);
+		const refs = diveRefs(f);
+		await assert.rejects(put(f.ctx), /conflicts with origin\/main as it moved, so nothing was changed/);
+		assert.equal(diveRefs(f), refs, "no dive ref pushed or deleted");
+		assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), dive, "still on the dive branch");
+		assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), dive, "and its checkout");
+	}
+});
+
+test("a record the remote refuses is not dropped once a person has amended it", () => {
+	const f = fixture("record-amended");
+	const base = git(f.hero, "rev-parse", "HEAD");
+	const clone = other(f);
+	raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\necho z > z.md\ngit add -A\n${PERSON} commit -q -m moved\ngit push -q origin HEAD:main\ncd "${sh(f.hero)}"\necho person > person.md\ngit add -A\ngit -c user.name=Person -c user.email=person@example.com commit -q --amend --no-edit`]);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /moved while its record was being pushed, so nothing was changed/);
+	assert.equal(existsSync(join(f.hero, "person.md")), true, "the person's file is kept");
+	assert.equal(git(f.hero, "rev-list", "--count", `${base}..HEAD`), "1", "and the amended commit");
+	assert.equal(git(f.hero, "log", "-1", "--format=%cn"), "Person");
+});
+
+/** A hero home with a commit nosedive made, which the upstream has not, and the upstream moved by someone else. */
+function behind(label: string) {
+	const f = fixture(label);
+	own(f.hero, "mine.md", "mine\n", "a turn");
+	const clone = other(f);
+	clone.push("z.md", "z\n");
+	const hero = findBridge(f.hero)!;
+	const up = upstreamOf(hero, "main")!;
+	fetchUpstream(hero, up);
+	return { f, clone, hero, up };
+}
+
+test("syncHome keeps a file a person edited while its push was in flight, and moves the rest", () => {
+	const { f, hero, up } = behind("sync-edit");
+	raceOnMain(f.hero, [`cd "${sh(f.hero)}"\necho edited >> mine.md`]);
+	syncHome(hero, "main", up);
+	assert.match(readFileSync(join(f.hero, "mine.md"), "utf8"), /edited/, "not erased by a reset");
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), originMain(f), "the home moved to what was pushed");
+	assert.equal(readFileSync(join(f.hero, "z.md"), "utf8"), "z\n");
+});
+
+test("syncHome leaves the home and a file in its way alone when the file was made while its push was in flight", () => {
+	const { f, hero, up } = behind("sync-way");
+	const old = git(f.hero, "rev-parse", "HEAD");
+	raceOnMain(f.hero, [`cd "${sh(f.hero)}"\necho mine > z.md`]);
+	assert.throws(() => syncHome(hero, "main", up), /main moved or changed meanwhile: origin\/main has its commits, and the local branch and its files were left alone/);
+	assert.equal(readFileSync(join(f.hero, "z.md"), "utf8"), "mine\n", "not erased by a reset");
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), old, "the home is where it was");
+});
+
+test("a record's retry keeps a file made while its push was in flight, and pushes nothing over it", () => {
+	const f = fixture("record-way");
+	const clone = other(f);
+	raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\necho z > z.md\ngit add -A\n${PERSON} commit -q -m moved\ngit push -q origin HEAD:main\ncd "${sh(f.hero)}"\necho mine > z.md`]);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /main changed while its record was being replayed, so nothing was pushed/);
+	assert.equal(readFileSync(join(f.hero, "z.md"), "utf8"), "mine\n", "not erased by a reset");
+});
+
+test("a home push is refused when the remote was rewound after the fetch, instead of republishing a person's commit", () => {
+	const f = fixture("sync-rewound");
+	const clone = other(f);
+	const base = git(clone.dir, "rev-parse", "HEAD");
+	clone.push("h.md", "h\n", "by a person");
+	git(f.hero, "fetch", "-q", "origin");
+	git(f.hero, "merge", "-q", "--ff-only", "origin/main");
+	own(f.hero, "n.md", "n\n", "a turn");
+	// The remote is rewound after the hero fetched it, so its tracking ref still holds the person's commit.
+	git(clone.dir, "push", "-q", "--force", "origin", `${base}:refs/heads/main`);
+	const hero = findBridge(f.hero)!;
+	assert.throws(() => syncHome(hero, "main", upstreamOf(hero, "main")!), /main holds 1 commit origin\/main lacks that nosedive did not commit/);
+	assert.equal(originMain(f), base, "nothing republished");
+});
+
+test("a record's retry refuses a commit nosedive made that was not there at the start, and pushes nothing", () => {
+	const f = fixture("record-own-new");
+	const clone = other(f);
+	const base = git(clone.dir, "rev-parse", "HEAD");
+	own(clone.dir, "x.md", "x\n", "made by nosedive elsewhere");
+	git(clone.dir, "push", "-q", "origin", "HEAD:main");
+	git(f.hero, "fetch", "-q", "origin");
+	git(f.hero, "merge", "-q", "--ff-only", "origin/main");
+	// The remote is rewound and moves on, so the commit is in the range again.
+	git(clone.dir, "switch", "-q", "-c", "moved", base);
+	writeFileSync(join(clone.dir, "y.md"), "y\n");
+	git(clone.dir, "add", "-A");
+	git(clone.dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "y");
+	const moved = git(clone.dir, "rev-parse", "HEAD");
+	git(clone.dir, "push", "-q", "--force", "origin", "moved:main");
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /main now holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
+	assert.equal(originMain(f), moved, "nothing pushed");
+});
+
+test("a replay that makes no commit approves nothing: the upstream's own commit is refused when the remote is rewound after", () => {
+	const f = fixture("record-noop");
+	const clone = other(f);
+	const base = git(clone.dir, "rev-parse", "HEAD");
+	alike(f.hero, "a.md", "mine\n");
+	const carried = new Set([git(f.hero, "rev-parse", "HEAD")]);
+	// The upstream takes the same change from someone else, then is rewound onto another commit.
+	writeFileSync(join(clone.dir, "a.md"), "mine\n");
+	git(clone.dir, "add", "-A");
+	git(clone.dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "the same change");
+	git(clone.dir, "switch", "-q", "-c", "w", base);
+	writeFileSync(join(clone.dir, "w.md"), "w\n");
+	git(clone.dir, "add", "-A");
+	git(clone.dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "w");
+	const rewound = git(clone.dir, "rev-parse", "HEAD");
+	git(clone.dir, "switch", "-q", "main");
+	raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\ngit push -q origin main:main`, `cd "${sh(clone.dir)}"\ngit push -q --force origin w:main`]);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record"), carried), /main now holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
+	assert.equal(originMain(f), rewound, "nothing pushed");
+});
+
+test("a record is refused, with nothing pushed, when the home holds a commit a person made that is not named as carried", () => {
+	const f = fixture("record-person");
+	alike(f.hero, "a.md", "mine\n");
+	const before = originMain(f);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /main holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
+	assert.equal(originMain(f), before);
+});
+
+test("a turn is kept off a home that holds a commit a person made, and nothing of it is pushed", async () => {
+	const f = fixture("turn-person");
+	await jump({ ref: f.featId }, f.ctx);
+	const tree = join(tempDir("jump-wt"), "main-copy");
+	git(f.hero, "worktree", "add", "-q", tree, "main");
+	alike(tree, "a.md", "mine\n");
+	git(f.hero, "worktree", "remove", "--force", tree);
+	own(f.hero, "turn.md", "a turn\n", "a turn");
+	const before = originMain(f);
+	const home = git(f.hero, "rev-parse", "main");
+	const outcome = putTurnOnHome(findBridge(f.hero)!, "main", git(f.hero, "rev-parse", "HEAD"));
+	assert.equal(outcome.kind, "dive-branch-only");
+	assert.match("why" in outcome ? outcome.why : "", /main holds 1 commit origin\/main lacks that nosedive did not commit/);
+	assert.equal(originMain(f), before, "nothing published");
+	assert.equal(git(f.hero, "rev-parse", "main"), home, "the home is as it was");
+});
+
+test("a jump of a doc the hero does not know changes nothing: no upstream set, nothing published", async () => {
+	const f = fixture("jump-unknown");
+	const wt = worktree(f, "worktree-agent");
+	f.plan("Do the unknown part", true, wt);
+	const before = originMain(f);
+	const at = git(wt, "rev-parse", "worktree-agent");
+	await assert.rejects(jump({ ref: mintUuid() }, { ...f.ctx, cwd: wt }), /no doc [0-9a-f-]+ in the hero on worktree-agent/);
+	assert.equal(originMain(f), before, "nothing published");
+	assert.equal(git(wt, "rev-parse", "worktree-agent"), at);
+	assert.equal(spawnSync("git", ["config", "branch.worktree-agent.merge"], { cwd: wt, encoding: "utf8" }).stdout.trim(), "", "no upstream set");
+
+	// With an upstream already, the same.
+	own(f.hero, "mine.md", "mine\n", "a turn");
+	await assert.rejects(jump({ ref: mintUuid() }, f.ctx), /no doc [0-9a-f-]+ in the hero on main/);
+	assert.equal(originMain(f), before, "nothing published");
 });

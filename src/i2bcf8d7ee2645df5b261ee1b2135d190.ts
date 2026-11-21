@@ -51,7 +51,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		}
 		stamp(scope.dir, ["HEAD", "--not", "--remotes=origin"], trailers);
 		const head = runGit(scope.dir, "rev-parse", "HEAD").text;
-		const pushed = runGit(scope.dir, "push", "-q", "origin", `HEAD:refs/heads/${scope.branch}`);
+		// Only while the work branch is as it was found, or still absent.
+		const pushed = runGit(scope.dir, "push", "-q", `--force-with-lease=refs/heads/${scope.branch}:${published.get(scope.name) ?? ""}`, "origin", `HEAD:refs/heads/${scope.branch}`);
 		if (!pushed.ok) throw new Error(`cannot push ${scope.name} to ${scope.branch}: ${pushed.text}`);
 		runGit(scope.dir, "update-ref", `refs/remotes/origin/${scope.branch}`, head);
 		lines.push(`- ${scope.name}: pushed ${head.slice(0, 7)} to ${scope.branch}`);
@@ -69,6 +70,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	}
 	// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
 	const tip = runGit(hero.dir, "rev-parse", "HEAD").text;
+	// The dive's own work, which the record may be pushed with; nothing else the home holds that nosedive did not commit.
+	const carried = new Set(runGit(hero.dir, "rev-list", `refs/heads/${home}..${tip}`).text.split("\n").filter(Boolean));
 	runGit(hero.dir, "checkout", "-q", home);
 	runGit(hero.dir, "merge", "-q", "--ff-only", tip);
 	runGit(hero.dir, "branch", "-q", "-D", dive.branch);
@@ -76,7 +79,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	pushRecord(hero, () => {
 		const doc = heroDoc(hero, id)!;
 		recordDive(hero, doc, { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...lines] }, ctx.capes[0]!.version);
-	});
+	}, carried);
 
 	const featId = featOf(dive.doc);
 	deleteRefs(hero.dir, diveRefs(hero.dir, id).map(({ ref }) => ref));

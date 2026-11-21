@@ -120,8 +120,13 @@ export function homeUpstream(hero: Hero, home: string): Upstream {
 	return up;
 }
 
+/** Whether a doc is in the hero's kb here, or in the tree of `ref`, which a fast-forward to it would bring. */
+export function docKnown(hero: Hero, ref: string, id: string): boolean {
+	return !!heroDoc(hero, id) || runGit(hero.dir, "ls-tree", "-r", "--name-only", ref).text.split("\n").some((path) => path === `${id}.md` || path.endsWith(`/${id}.md`));
+}
+
 /** Adopts origin's trunk as a home's upstream when it has none and shares history with it, as a branch cut from it does however far it moved since, saying so; nothing otherwise, which homeUpstream refuses (jump-home-without-upstream). */
-export function adoptTrunk(hero: Hero, home: string): string | undefined {
+export function adoptTrunk(hero: Hero, home: string, vet?: (upstreamRef: string) => void): string | undefined {
 	if (upstreamOf(hero, home)) return undefined;
 	// Origin's own word for its default branch, not a possibly stale origin/HEAD; offline is no reason to say the home has no upstream.
 	const asked = runGit(hero.dir, "ls-remote", "--symref", "origin", "HEAD");
@@ -130,6 +135,8 @@ export function adoptTrunk(hero: Hero, home: string): string | undefined {
 	const fetched = runGit(hero.dir, "fetch", "-q", "origin", `+refs/heads/${trunk}:refs/remotes/origin/${trunk}`);
 	if (!fetched.ok) throw new Error(`cannot fetch origin/${trunk}, so ${home} was left without an upstream (offline?): ${fetched.text}`);
 	if (!runGit(hero.dir, "merge-base", `refs/remotes/origin/${trunk}`, `refs/heads/${home}`).ok) return undefined;
+	// The caller's refusal, before any upstream is set.
+	vet?.(`refs/remotes/origin/${trunk}`);
 	if (!runGit(hero.dir, "config", `branch.${home}.remote`, "origin").ok || !runGit(hero.dir, "config", `branch.${home}.merge`, `refs/heads/${trunk}`).ok) {
 		releaseAdopted(hero, home);
 		throw new Error(`cannot set ${home}'s upstream to origin/${trunk}, so it was left without one`);
@@ -189,29 +196,34 @@ function listed(commits: { sha: string; subject: string }[]): string[] {
 	return commits.map((commit) => `${commit.sha.slice(0, 7)} ${commit.subject}`);
 }
 
+/** What planHome decided: the home as it was, the upstream as fetched, the tip the home becomes, and the commits that go. */
+type HomePlan = { old: string; upstream: string; tip: string; ahead: { sha: string; subject: string }[] };
+
 /**
  * What a home's unpushed commits become on its upstream, worked out off to the side by plumbing: no working tree, no ref and
  * no remote is touched. Refused when any is not nosedive's, when one conflicts with the upstream as it moved, or when the
  * home is checked out in another worktree, which a moved branch would leave confused. The convention that a commit with
- * nosedive as committer is nosedive's is no proof of who made it.
+ * nosedive as committer is nosedive's is no proof of who made it. Every range is taken from one sha of the upstream, which
+ * is what a push is then conditional on.
  */
-function planHome(hero: Hero, home: string, up: Upstream): { old: string; tip: string; ahead: { sha: string; subject: string }[] } {
+function planHome(hero: Hero, home: string, up: Upstream): HomePlan {
 	const ref = `refs/heads/${home}`;
 	const old = must(hero.dir, "rev-parse", ref);
-	const ahead = commitsIn(hero.dir, `${up.ref}..${ref}`);
+	const upstream = must(hero.dir, "rev-parse", up.ref);
+	const ahead = commitsIn(hero.dir, `${upstream}..${old}`);
 	const others = ahead.filter((commit) => !commit.own);
 	if (others.length > 0) throw new Error(`${home} holds ${others.length} commit${others.length === 1 ? "" : "s"} ${up.remote}/${up.name} lacks that nosedive did not commit: push or drop ${others.length === 1 ? "it" : "them"} first:\n  ${listed(others).join("\n  ")}`);
-	if (must(hero.dir, "rev-list", "--count", `${ref}..${up.ref}`) === "0") return { old, tip: old, ahead };
-	if (must(hero.dir, "rev-list", "--merges", "--count", `${up.ref}..${ref}`) !== "0") throw new Error(`${home} holds a merge commit ${up.remote}/${up.name} lacks, which is not replayed onto a moved upstream: push or drop it first`);
+	if (must(hero.dir, "rev-list", "--count", `${old}..${upstream}`) === "0") return { old, upstream, tip: old, ahead };
+	if (must(hero.dir, "rev-list", "--merges", "--count", `${upstream}..${old}`) !== "0") throw new Error(`${home} holds a merge commit ${up.remote}/${up.name} lacks, which is not replayed onto a moved upstream: push or drop it first`);
 	const elsewhere = checkedOutElsewhere(hero, ref);
 	if (elsewhere) throw new Error(`${home} is checked out in ${elsewhere}, which a moved branch would leave confused: its checkout is left alone and nothing was changed`);
-	let tip = must(hero.dir, "rev-parse", up.ref);
+	let tip = upstream;
 	for (const commit of ahead) {
 		const next = pick(hero.dir, commit.sha, tip);
 		if ("conflict" in next) throw new Error(`the ${ahead.length} commit${ahead.length === 1 ? "" : "s"} nosedive made on ${home} conflict${ahead.length === 1 ? "s" : ""} with ${up.remote}/${up.name} as it moved, so nothing was changed: push or drop ${ahead.length === 1 ? "it" : "them"} first: ${next.conflict}`);
 		tip = next.sha;
 	}
-	return { old, tip, ahead };
+	return { old, upstream, tip, ahead };
 }
 
 /** Refuses what planHome would, changing nothing: a dive being put down or landed finds out before it pushes or deletes anything. */
@@ -220,35 +232,66 @@ export function checkHome(hero: Hero, home: string, up: Upstream): void {
 }
 
 /**
- * Brings a home up to its upstream, as last fetched: fast-forwarded when behind. The commits it holds that the upstream lacks
- * are published, but only when nosedive committed every one (jump-publishes-nosedive-committed): replayed onto the upstream
- * if it moved, nosedive still their committer, the tip pushed as it is, and only once it is on the remote the local home moved
- * to it, by compare-and-swap, its files too when it is checked out here and clean. A rejected push goes back to the plan, which
- * refuses what is no longer nosedive's. Returns `<sha> <subject>` of each commit published.
+ * Pushes `tip` to an upstream branch only while the remote still holds `expected`, the sha every commit was judged against,
+ * and `tip` builds on it: a remote that moved or was rewound refuses the push, rather than take in a commit nosedive never approved.
  */
-export function syncHome(hero: Hero, home: string, up: Upstream): string[] {
-	const ref = `refs/heads/${home}`;
-	for (let tries = 0; ; tries++) {
-		const { old, tip, ahead } = planHome(hero, home, up);
-		const here = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === home;
-		if (tip !== old && here && must(hero.dir, "status", "--porcelain")) throw new Error(`${home} has uncommitted changes, which moving it would discard: commit them first, so nothing was changed`);
-		const published = listed(commitsIn(hero.dir, `${up.ref}..${tip}`));
-		if (ahead.length > 0) {
-			const pushed = runGit(hero.dir, "push", "-q", up.remote, `${tip}:refs/heads/${up.name}`);
-			if (!pushed.ok) {
-				if (tries === 2) throw new Error(`cannot push ${home}'s commits to ${up.remote}/${up.name}: ${pushed.text}`);
-				fetchUpstream(hero, up);
-				continue;
-			}
-			must(hero.dir, "update-ref", up.ref, tip);
-		}
-		if (tip !== old) {
-			const moved = runGit(hero.dir, "update-ref", ref, tip, old);
-			if (!moved.ok) throw new Error(`${home} moved meanwhile: ${up.remote}/${up.name} has its commits, and the local branch was left alone: ${moved.text}`);
-			if (here) must(hero.dir, "reset", "-q", "--hard");
-		}
-		return ahead.length > 0 ? published : [];
+function pushLeased(dir: string, up: Upstream, tip: string, expected: string): { ok: boolean; text: string } {
+	if (!runGit(dir, "merge-base", "--is-ancestor", expected, tip).ok) return { ok: false, text: `${tip.slice(0, 7)} does not build on ${up.remote}/${up.name} as fetched` };
+	return runGit(dir, "push", "-q", `--force-with-lease=refs/heads/${up.name}:${expected}`, up.remote, `${tip}:refs/heads/${up.name}`);
+}
+
+/**
+ * Moves a branch from `old` to `next` by compare-and-swap, and its files with it when it is checked out here: a two-way
+ * read-tree, which refuses to touch a file changed since `old` that `next` also changes, so no edit is erased. Returns why
+ * it could not, with everything as it was.
+ */
+function moveBranch(dir: string, ref: string, old: string, next: string, here: boolean): string | undefined {
+	if (here) {
+		const merged = runGit(dir, "read-tree", "-m", "-u", old, next);
+		if (!merged.ok) return merged.text;
 	}
+	const moved = runGit(dir, "update-ref", ref, next, old);
+	if (moved.ok) return undefined;
+	if (here) runGit(dir, "read-tree", "-m", "-u", next, old);
+	return moved.text;
+}
+
+/**
+ * Publishes a home's unpushed commits, which only nosedive may have committed (jump-publishes-nosedive-committed): replayed
+ * onto the upstream if it moved, nosedive still their committer, the tip pushed as it is, and only if the remote still holds
+ * the sha it was planned from. A refused push goes back to the plan from the new fetch, which refuses what is no longer
+ * nosedive's, a conflict included; so a dive's teardown can wait for this. The local home is left for settleHome.
+ */
+export function publishHome(hero: Hero, home: string, up: Upstream): HomePlan & { published: string[] } {
+	for (let tries = 0; ; tries++) {
+		const plan = planHome(hero, home, up);
+		const here = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === home;
+		if (plan.tip !== plan.old && here && must(hero.dir, "status", "--porcelain")) throw new Error(`${home} has uncommitted changes, which moving it would discard: commit them first, so nothing was changed`);
+		if (plan.ahead.length === 0) return { ...plan, published: [] };
+		const published = listed(commitsIn(hero.dir, `${plan.upstream}..${plan.tip}`));
+		const pushed = pushLeased(hero.dir, up, plan.tip, plan.upstream);
+		if (pushed.ok) {
+			runGit(hero.dir, "update-ref", up.ref, plan.tip, plan.upstream);
+			return { ...plan, published };
+		}
+		if (tries === 2) throw new Error(`cannot push ${home}'s commits to ${up.remote}/${up.name}: ${pushed.text}`);
+		fetchUpstream(hero, up);
+	}
+}
+
+/** Moves the local home to what publishHome pushed, by compare-and-swap, its files too when it is checked out here and untouched. */
+export function settleHome(hero: Hero, home: string, up: Upstream, plan: HomePlan): void {
+	if (plan.tip === plan.old) return;
+	const here = runGit(hero.dir, "symbolic-ref", "-q", "--short", "HEAD").text === home;
+	const failed = moveBranch(hero.dir, `refs/heads/${home}`, plan.old, plan.tip, here);
+	if (failed) throw new Error(`${home} moved or changed meanwhile: ${up.remote}/${up.name} has its commits, and the local branch and its files were left alone: ${failed}`);
+}
+
+/** Brings a home up to its upstream, as last fetched: fast-forwarded when behind, its commits published first. Returns `<sha> <subject>` of each commit published. */
+export function syncHome(hero: Hero, home: string, up: Upstream): string[] {
+	const plan = publishHome(hero, home, up);
+	settleHome(hero, home, up, plan);
+	return plan.published;
 }
 
 /** Fetches a repo's branches and nosedive refs from origin. */
@@ -669,6 +712,9 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	});
 	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
 
+	// The home's commits are published now, so a conflict on a retry is met before anything is torn down; the local home moves last.
+	const published = publishHome(hero, home, up);
+
 	for (const put of puts) {
 		if (runGit(put.dir, "status", "--porcelain").text) {
 			runGit(put.dir, "add", "-A");
@@ -723,51 +769,64 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 	const switched = runGit(hero.dir, "checkout", "-q", home);
 	if (!switched.ok) throw new Error(`cannot switch the hero back to ${home}: ${switched.text}`);
 	runGit(hero.dir, "branch", "-q", "-D", dive.branch);
-	syncHome(hero, home, up);
+	settleHome(hero, home, up, published);
 	return { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 }
 
 /**
  * Commits a record with `record` on the branch the hero is on, a dive's home, and pushes it to its upstream
- * (records-on-jumped-branch); when the upstream moved meanwhile, it drops the record, fetches, rebases onto the new tip
- * and records again.
+ * (records-on-jumped-branch), only while the remote still holds the sha the commits were judged against. When it does not, the
+ * record is dropped, the upstream fetched, the home's commits replayed onto it and the record made again. What may ride with
+ * the record is the home's unpushed commits at the start, each nosedive's or named in `carried` (a land's own work), and each
+ * commit a replay newly makes: a commit that is anyone else's, or was on the remote, stops the retry.
  */
-export function pushRecord(hero: Hero, record: () => void): void {
+export function pushRecord(hero: Hero, record: () => void, carried: ReadonlySet<string> = new Set()): void {
 	const home = heroBranch(hero);
+	const ref = `refs/heads/${home}`;
 	const up = homeUpstream(hero, home);
-	// What may be carried over a retry: by sha, so a commit that only looks like one (same author, date and subject) is not.
-	let approved = new Set(commitsIn(hero.dir, `${up.ref}..HEAD`).map((commit) => commit.sha));
+	let upstream = must(hero.dir, "rev-parse", up.ref);
 	let base = must(hero.dir, "rev-parse", "HEAD");
+	const start = commitsIn(hero.dir, `${upstream}..${base}`);
+	const others = start.filter((commit) => !commit.own && !carried.has(commit.sha));
+	if (others.length > 0) throw new Error(`${home} holds ${others.length} commit${others.length === 1 ? "" : "s"} ${up.remote}/${up.name} lacks that nosedive did not commit, so nothing was pushed: push or drop ${others.length === 1 ? "it" : "them"} first:\n  ${listed(others).join("\n  ")}`);
+	// What may be carried over a retry: by sha, so a commit that only looks like one (same author, date and subject) is not.
+	let approved = new Set(start.map((commit) => commit.sha));
 	for (let tries = 0; ; tries++) {
 		record();
-		const pushed = runGit(hero.dir, "push", "-q", up.remote, `HEAD:refs/heads/${up.name}`);
+		const recorded = must(hero.dir, "rev-parse", "HEAD");
+		const pushed = pushLeased(hero.dir, up, recorded, upstream);
 		if (pushed.ok) {
-			runGit(hero.dir, "update-ref", up.ref, "HEAD");
+			runGit(hero.dir, "update-ref", up.ref, recorded, upstream);
 			return;
 		}
-		// Dropping the record is only safe while HEAD is the record on top of what was there before it.
-		if (runGit(hero.dir, "rev-parse", "HEAD^").text !== base) throw new Error(`${home} moved while its record was being pushed, so nothing was changed: HEAD is no longer the record`);
-		must(hero.dir, "reset", "-q", "--hard", "HEAD^");
+		// Dropping the record is only safe while HEAD is exactly the record, on top of what was there before it, and nothing is lost by moving off it.
+		if (runGit(hero.dir, "rev-parse", "HEAD").text !== recorded || runGit(hero.dir, "rev-parse", `${recorded}^`).text !== base) throw new Error(`${home} moved while its record was being pushed, so nothing was changed: HEAD is no longer the record`);
+		const dropped = moveBranch(hero.dir, ref, recorded, base, true);
+		if (dropped) throw new Error(`${home} moved while its record was being pushed, so nothing was changed: ${dropped}`);
 		if (tries === 2) throw new Error(`cannot push the hero's record to ${up.remote}/${up.name}: ${pushed.text}`);
 		fetchUpstream(hero, up);
+		upstream = must(hero.dir, "rev-parse", up.ref);
 		// Replayed off to the side with each commit's own committer, and only what was approved: a commit that is not
-		// nosedive's and is not one the last replay made or the start held (a rewound upstream can make one) stops the retry.
-		const commits = commitsIn(hero.dir, `${up.ref}..HEAD`);
-		const stray = commits.filter((commit) => !commit.own && !approved.has(commit.sha));
+		// one the start held or the last replay newly made (a rewound upstream can bring one back) stops the retry.
+		const commits = commitsIn(hero.dir, `${upstream}..${base}`);
+		const stray = commits.filter((commit) => !approved.has(commit.sha));
 		if (stray.length > 0) throw new Error(`${home} now holds ${stray.length} commit${stray.length === 1 ? "" : "s"} ${up.remote}/${up.name} lacks that nosedive did not commit, so nothing was pushed: push or drop ${stray.length === 1 ? "it" : "them"} first:\n  ${listed(stray).join("\n  ")}`);
-		let tip = must(hero.dir, "rev-parse", up.ref);
-		const replayed = new Set<string>();
+		let tip = upstream;
+		const made = new Set<string>();
 		for (const commit of commits) {
 			const next = pick(hero.dir, commit.sha, tip);
 			if ("conflict" in next) throw new Error(`the hero's work conflicts with ${up.remote}/${up.name} as it moved: ${next.conflict}`);
+			// A change the upstream holds already makes no commit, and the upstream's own commit is not approved by that.
+			if (next.sha !== tip) made.add(next.sha);
 			tip = next.sha;
-			replayed.add(tip);
 		}
-		must(hero.dir, "reset", "-q", "--hard", tip);
-		approved = replayed;
+		const replayed = moveBranch(hero.dir, ref, base, tip, true);
+		if (replayed) throw new Error(`${home} changed while its record was being replayed, so nothing was pushed: ${replayed}`);
+		approved = made;
 		base = tip;
 	}
 }
+
 
 /** What became of a turn's copy on the dive's home: pushed, kept there unpushed, or left on the dive branch alone. */
 export type TurnOutcome = { kind: "pushed"; sha: string; to: string } | { kind: "unpushed"; why: string; to: string } | { kind: "dive-branch-only"; why: string };
@@ -800,39 +859,59 @@ function pick(dir: string, commit: string, onto: string): { sha: string } | { co
  * Puts a turn's commit, which pass made on the dive branch, on the dive's home and pushes the home to its upstream
  * (turn-reaches-home-how): the home is not checked out, so its ref moves and no file does. Pushed with whatever a failed
  * turn left unpushed beneath it, and nothing else; when the upstream moved, the home's unpushed commits are taken onto
- * its new tip and pushed again, as pushRecord does. A conflict, or a home another worktree has checked out, leaves the home as it was.
+ * its new tip and pushed again, as pushRecord does. The push is conditional on the upstream as fetched, and refused while
+ * the home holds a commit its upstream lacks that nosedive did not commit (jump-publishes-nosedive-committed). A conflict,
+ * or a home another worktree has checked out, leaves the home as it was.
  */
 export function putTurnOnHome(hero: Hero, home: string, commit: string): TurnOutcome {
 	const dir = hero.dir;
 	const ref = `refs/heads/${home}`;
 	const elsewhere = runGit(dir, "worktree", "list", "--porcelain").text.split("\n").some((line) => line.trim() === `branch ${ref}`);
 	if (elsewhere) return { kind: "dive-branch-only", why: `${home} is checked out in another worktree, which a moved branch would leave confused` };
+	const up = upstreamOf(hero, home);
+	const to = up ? `${up.remote}/${up.name}` : home;
+	/** The home's commits its upstream lacks that nosedive did not commit, which a push would publish. */
+	const foreign = () => (up && runGit(dir, "rev-parse", "--verify", "-q", up.ref).ok ? commitsIn(dir, `${up.ref}..${ref}`).filter((each) => !each.own) : []);
+	const refusal = (others: { sha: string; subject: string }[]): TurnOutcome => ({ kind: "dive-branch-only", why: `${home} holds ${others.length} commit${others.length === 1 ? "" : "s"} ${to} lacks that nosedive did not commit, which a push would publish: push or drop ${others.length === 1 ? "it" : "them"} first` });
 	const before = runGit(dir, "rev-parse", ref).text;
+	const held = foreign();
+	if (held.length > 0) return refusal(held);
 	const first = pick(dir, commit, before);
 	if ("conflict" in first) return { kind: "dive-branch-only", why: `it conflicts with ${home}: ${first.conflict}` };
-	runGit(dir, "update-ref", ref, first.sha, before);
-	const up = upstreamOf(hero, home);
+	let mine = first.sha;
+	if (!runGit(dir, "update-ref", ref, mine, before).ok) return { kind: "dive-branch-only", why: `${home} moved meanwhile` };
 	if (!up) return { kind: "unpushed", why: `${home} has no upstream`, to: home };
-	const to = `${up.remote}/${up.name}`;
+	let expected = runGit(dir, "rev-parse", "--verify", "-q", up.ref).text;
 	for (let tries = 0; ; tries++) {
-		const pushed = runGit(dir, "push", "-q", up.remote, `${ref}:refs/heads/${up.name}`);
+		const pushed = expected ? pushLeased(dir, up, mine, expected) : runGit(dir, "push", "-q", up.remote, `${mine}:refs/heads/${up.name}`);
 		if (pushed.ok) {
-			runGit(dir, "update-ref", up.ref, ref);
-			return { kind: "pushed", sha: runGit(dir, "rev-parse", "--short", ref).text, to };
+			runGit(dir, "update-ref", up.ref, mine);
+			return { kind: "pushed", sha: runGit(dir, "rev-parse", "--short", mine).text, to };
 		}
 		const fetched = runGit(dir, "fetch", "-q", up.remote, `+refs/heads/${up.name}:${up.ref}`);
-		const moved = fetched.ok && !runGit(dir, "merge-base", "--is-ancestor", up.ref, ref).ok;
-		if (!moved || tries === 2) return { kind: "unpushed", why: complaint(pushed.text), to };
+		const now = runGit(dir, "rev-parse", "--verify", "-q", up.ref).text;
+		const moved = fetched.ok && !runGit(dir, "merge-base", "--is-ancestor", up.ref, mine).ok;
+		// A remote that moved since it was last fetched is tried again from what it holds now, which is no failure of the push.
+		const changed = fetched.ok && now !== expected;
+		if (!fetched.ok || tries === 2 || (!moved && !changed)) return { kind: "unpushed", why: complaint(pushed.text), to };
+		expected = now;
+		if (!moved) continue;
 		// Moved: what the home holds above the upstream goes on its new tip, this turn's copy last.
-		let tip = runGit(dir, "rev-parse", up.ref).text;
-		for (const sha of runGit(dir, "rev-list", "--reverse", `${up.ref}..${ref}`).text.split("\n").filter(Boolean)) {
+		const others = foreign();
+		if (others.length > 0) {
+			runGit(dir, "update-ref", ref, before, mine);
+			return refusal(others);
+		}
+		let tip = now;
+		for (const sha of runGit(dir, "rev-list", "--reverse", `${up.ref}..${mine}`).text.split("\n").filter(Boolean)) {
 			const next = pick(dir, sha, tip);
 			if ("conflict" in next) {
-				runGit(dir, "update-ref", ref, before);
+				runGit(dir, "update-ref", ref, before, mine);
 				return { kind: "dive-branch-only", why: `it conflicts with ${to} as it moved: ${next.conflict}` };
 			}
 			tip = next.sha;
 		}
-		runGit(dir, "update-ref", ref, tip);
+		if (!runGit(dir, "update-ref", ref, tip, mine).ok) return { kind: "unpushed", why: `${home} moved meanwhile`, to };
+		mine = tip;
 	}
 }
