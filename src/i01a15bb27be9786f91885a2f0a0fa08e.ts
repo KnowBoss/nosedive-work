@@ -173,14 +173,14 @@ function checkedOutElsewhere(hero: Hero, ref: string): string | undefined {
 /** The committer of every commit nosedive makes by itself, which is how a commit is told to be its own. */
 const NOSEDIVE_COMMITTER = { GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" };
 
-/** The commits in a range, oldest first, with whether nosedive committed each and a `key` that survives a replay; refuses when git cannot list them. */
-function commitsIn(dir: string, range: string): { sha: string; subject: string; own: boolean; key: string }[] {
-	return must(dir, "log", "--reverse", "--format=%H%x00%cn%x00%ce%x00%ae%x00%aI%x00%s", range)
+/** The commits in a range, oldest first, with whether nosedive committed each; refuses when git cannot list them. */
+function commitsIn(dir: string, range: string): { sha: string; subject: string; own: boolean }[] {
+	return must(dir, "log", "--reverse", "--format=%H%x00%cn%x00%ce%x00%s", range)
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => {
-			const [sha, name, email, authorEmail, authored, subject] = line.split("\0") as [string, string, string, string, string, string];
-			return { sha, subject, own: name === NOSEDIVE_COMMITTER.GIT_COMMITTER_NAME && email === NOSEDIVE_COMMITTER.GIT_COMMITTER_EMAIL, key: `${authorEmail}\0${authored}\0${subject}` };
+			const [sha, name, email, subject] = line.split("\0") as [string, string, string, string];
+			return { sha, subject, own: name === NOSEDIVE_COMMITTER.GIT_COMMITTER_NAME && email === NOSEDIVE_COMMITTER.GIT_COMMITTER_EMAIL };
 		});
 }
 
@@ -735,7 +735,9 @@ export function putDown(dive: Dive, version: string): { puts: Put[]; refs: Map<s
 export function pushRecord(hero: Hero, record: () => void): void {
 	const home = heroBranch(hero);
 	const up = homeUpstream(hero, home);
-	const approved = new Set(commitsIn(hero.dir, `${up.ref}..HEAD`).filter((commit) => !commit.own).map((commit) => commit.key));
+	// What may be carried over a retry: by sha, so a commit that only looks like one (same author, date and subject) is not.
+	let approved = new Set(commitsIn(hero.dir, `${up.ref}..HEAD`).map((commit) => commit.sha));
+	let base = must(hero.dir, "rev-parse", "HEAD");
 	for (let tries = 0; ; tries++) {
 		record();
 		const pushed = runGit(hero.dir, "push", "-q", up.remote, `HEAD:refs/heads/${up.name}`);
@@ -743,21 +745,27 @@ export function pushRecord(hero: Hero, record: () => void): void {
 			runGit(hero.dir, "update-ref", up.ref, "HEAD");
 			return;
 		}
+		// Dropping the record is only safe while HEAD is the record on top of what was there before it.
+		if (runGit(hero.dir, "rev-parse", "HEAD^").text !== base) throw new Error(`${home} moved while its record was being pushed, so nothing was changed: HEAD is no longer the record`);
 		must(hero.dir, "reset", "-q", "--hard", "HEAD^");
 		if (tries === 2) throw new Error(`cannot push the hero's record to ${up.remote}/${up.name}: ${pushed.text}`);
 		fetchUpstream(hero, up);
-		// Replayed off to the side with each commit's own committer, and only what was approved at the start: a commit that
-		// is not nosedive's and was not carried then (a rewound upstream can make one) stops the retry.
+		// Replayed off to the side with each commit's own committer, and only what was approved: a commit that is not
+		// nosedive's and is not one the last replay made or the start held (a rewound upstream can make one) stops the retry.
 		const commits = commitsIn(hero.dir, `${up.ref}..HEAD`);
-		const stray = commits.filter((commit) => !commit.own && !approved.has(commit.key));
+		const stray = commits.filter((commit) => !commit.own && !approved.has(commit.sha));
 		if (stray.length > 0) throw new Error(`${home} now holds ${stray.length} commit${stray.length === 1 ? "" : "s"} ${up.remote}/${up.name} lacks that nosedive did not commit, so nothing was pushed: push or drop ${stray.length === 1 ? "it" : "them"} first:\n  ${listed(stray).join("\n  ")}`);
 		let tip = must(hero.dir, "rev-parse", up.ref);
+		const replayed = new Set<string>();
 		for (const commit of commits) {
 			const next = pick(hero.dir, commit.sha, tip);
 			if ("conflict" in next) throw new Error(`the hero's work conflicts with ${up.remote}/${up.name} as it moved: ${next.conflict}`);
 			tip = next.sha;
+			replayed.add(tip);
 		}
 		must(hero.dir, "reset", "-q", "--hard", tip);
+		approved = replayed;
+		base = tip;
 	}
 }
 

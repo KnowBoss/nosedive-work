@@ -12,7 +12,7 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
 import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { diveBranch, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { diveBranch, pushRecord, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 /** The dive branch a dive jumped from the hero's main has. */
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
@@ -597,4 +597,49 @@ test("a dive legacy left held by a bare email is taken over by a checkout of tha
 	await jump({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id);
 	assert.match(f.doc(id), /\n  diver: diver@example\.com#[0-9a-f]{12}\n/);
+});
+
+/** Commits a file a person made, with an author, date and subject fixed, so two of them differ only in content. */
+function alike(dir: string, file: string, text: string): void {
+	writeFileSync(join(dir, file), text);
+	git(dir, "add", "-A");
+	const env = { ...process.env, GIT_AUTHOR_NAME: "Alike", GIT_AUTHOR_EMAIL: "alike@example.com", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z" };
+	const made = spawnSync("git", ["-c", "user.name=Someone", "-c", "user.email=someone@example.com", "commit", "-q", "-m", "alike"], { cwd: dir, env, encoding: "utf8" });
+	assert.equal(made.status, 0, made.stderr);
+}
+
+test("a record's retry carries a commit approved at the start and publishes once the upstream moved", () => {
+	const f = fixture("record-retry");
+	alike(f.hero, "a.md", "mine\n");
+	other(f).push("z.md", "z\n");
+	pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record"));
+	assert.equal(originMain(f), git(f.hero, "rev-parse", "HEAD"));
+	assert.deepEqual(git(f.hero, "log", "--format=%s", "-3").split("\n"), ["record", "alike", "upstream moved"]);
+});
+
+test("a record's retry refuses a commit that only looks like an approved one, and pushes nothing", () => {
+	const f = fixture("record-alike");
+	const clone = other(f);
+	const base = git(clone.dir, "rev-parse", "HEAD");
+	alike(clone.dir, "a.md", "theirs\n");
+	git(clone.dir, "push", "-q", "origin", "HEAD:main");
+	git(f.hero, "fetch", "-q", "origin");
+	git(f.hero, "merge", "-q", "--ff-only", "origin/main");
+	alike(f.hero, "a2.md", "mine\n");
+	// The upstream is rewound and moves on, so the look-alike is in the range again.
+	git(clone.dir, "reset", "-q", "--hard", base);
+	writeFileSync(join(clone.dir, "z.md"), "z\n");
+	git(clone.dir, "add", "-A");
+	git(clone.dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "z");
+	git(clone.dir, "push", "-q", "--force", "origin", "HEAD:main");
+	const moved = originMain(f);
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => own(f.hero, "r.md", "r\n", "record")), /main now holds 1 commit origin\/main lacks that nosedive did not commit, so nothing was pushed/);
+	assert.equal(originMain(f), moved, "nothing pushed");
+});
+
+test("a record is not dropped when HEAD is no longer it", () => {
+	const f = fixture("record-moved");
+	other(f).push("z.md", "z\n");
+	assert.throws(() => pushRecord(findBridge(f.hero)!, () => { own(f.hero, "r.md", "r\n", "record"); own(f.hero, "s.md", "s\n", "more"); }), /moved while its record was being pushed, so nothing was changed/);
+	assert.equal(git(f.hero, "log", "-1", "--format=%s"), "more", "the commits are left where they are");
 });
