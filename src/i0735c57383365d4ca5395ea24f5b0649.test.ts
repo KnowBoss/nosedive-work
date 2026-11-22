@@ -625,3 +625,23 @@ test("a rerun names the commits the failed run had not published even when the h
 	assert.match(said, new RegExp(`${late.slice(0, 7)} add late\\.md`));
 	assert.match(said, /[0-9a-f]{7} late hero work/);
 });
+
+test("a commit made on a scope after the run took its tips is never planned or published by that run", async () => {
+	const f = fixture("land-snapshot-tips");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const parent = tempDir("land-snapshot-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "x.md"), "x\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "-m", "other");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	const guard = join(parent, "ran").replace(/\\/g, "/");
+	const scope = f.checkout.replace(/\\/g, "/");
+	const hook = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "reference-transaction");
+	// The run's own fetch of the moved home fires this, after the tips were taken and before anything is planned.
+	writeFileSync(hook, `#!/bin/sh\n[ "$1" = committed ] || exit 0\ncase "$(cat)" in *refs/remotes/origin/main*) ;; *) exit 0;; esac\n[ -e "${guard}" ] && exit 0\n: > "${guard}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${scope}" && echo late > late.md && git add -A && git -c user.name=O -c user.email=o@example.com commit -qm made-after-the-tips\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
+});

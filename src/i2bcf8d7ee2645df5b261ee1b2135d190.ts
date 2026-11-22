@@ -25,7 +25,19 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		for (const sha of planned) set.add(sha);
 		pinned.set(dir, set);
 	};
+	// Every checkout's tip, taken once as this invocation found it: it is what the gates, the comparison with the failed run and the plan all
+	// work from, so a commit made after it is never published by this run, whatever it passes or skips.
+	const snapshot = new Map<string, string>();
+	for (const dir of [hero.dir, ...dive.scopes.filter((scope) => scope.ours).map((scope) => scope.dir)]) {
+		const head = runGit(dir, "rev-parse", "HEAD").text;
+		snapshot.set(dir, head);
+		pinned.set(dir, new Set([head]));
+	}
+	const checkTips = () => {
+		for (const dir of snapshot.keys()) pin(dir, runGit(dir, "rev-parse", "HEAD").text, []);
+	};
 	const lines = await replanning(() => {
+		checkTips();
 		// Every refusal is found before anything is pushed, and so is every conflict.
 		const refused = readOnlyRefusals(dive);
 		if (runGit(hero.dir, "status", "--porcelain").text) refused.push("the hero has uncommitted changes: commit them first");
