@@ -323,6 +323,38 @@ test("two turns then a land leave each section once on the home, and no empty co
 	assert.equal(git(f.hero, "branch", "--list", "nosedive-*"), "");
 });
 
+// The dive's turns are commits on its branch and again on the home; land replays only what the home lacks (land-skips-applied-turns).
+for (const [label, around] of [
+	["before the first turn", [true, false, false]],
+	["between the turns", [false, true, false]],
+	["after the turns", [false, false, true]],
+	["before, between and after the turns", [true, true, true]],
+] as const) {
+	test(`two turns then a land with the person's commits ${label} leave each section once and each commit once`, async () => {
+		const f = await setup(`land-around-${around.map(Number).join("")}`);
+		const origin = git(f.hero, "remote", "get-url", "origin");
+		const base = git(f.hero, "rev-parse", "main");
+		const mine = (name: string) => {
+			writeFileSync(join(f.hero, `${name}.txt`), name);
+			git(f.hero, "add", "-A");
+			git(f.hero, "commit", "-qm", `person ${name}`);
+		};
+		if (around[0]) mine("a");
+		assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+		if (around[1]) mine("b");
+		assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+		if (around[2]) mine("c");
+		await land({}, f.plain);
+		assert.equal(heading(f.doc(f.id), "First"), 1);
+		assert.equal(heading(f.doc(f.id), "Second"), 1);
+		const subjects = git(f.hero, "log", "--format=%s", `${base}..main`).split("\n");
+		for (const [i, name] of ["a", "b", "c"].entries()) assert.equal(subjects.filter((s) => s === `person ${name}`).length, around[i] ? 1 : 0, `person ${name}`);
+		for (const commit of git(f.hero, "rev-list", `${base}..main`).split("\n")) assert.notEqual(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", commit), "", `${commit} changes something`);
+		assert.equal(git(origin, "rev-parse", "refs/heads/main"), git(f.hero, "rev-parse", "main"));
+		assert.equal(git(f.hero, "branch", "--list", "nosedive-*"), "");
+	});
+}
+
 test("land pushes a turn that could not be, with its record", async () => {
 	const f = await setup("land-kept");
 	const origin = git(f.hero, "remote", "get-url", "origin");
