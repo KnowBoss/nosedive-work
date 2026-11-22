@@ -238,6 +238,8 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 				tip = replayed.tip;
 				notes.push(`rebased onto ${scope.branch}`);
 			}
+			// The branch is replaced by `tip`: whatever it held that `tip` lacks, a local merge included, stays on an orphan ref.
+			if (old && !isAncestor(scope.dir, old, tip)) keep(old);
 			const parent = wipOn(scope.dir, tip);
 			files = { from: here, to: tip, ...(parent ? { index: parent } : {}) };
 			moves.push({ ref: local, old, new: parent ?? tip });

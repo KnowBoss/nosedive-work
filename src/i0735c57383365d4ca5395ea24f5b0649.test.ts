@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
+import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { fetchAll } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { unzipSync } from "fflate";
 import { fixture, git, tempDir } from "../test/harness.ts";
@@ -308,4 +309,114 @@ test("deletes all refs under lease when there is no work, including legacy names
 
 	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), "");
 	assert.ok(f.out.some((line) => line.includes("- data: no work")));
+});
+
+// Fix round 2: recovery from the partial prefixes a per-ref publish may leave, at the command level.
+
+/** A commit in a bare repo that no branch has, as another checkout's newer work on a dive ref would be. */
+function strayCommit(remote: string): string {
+	const env = { ...process.env, GIT_AUTHOR_NAME: "Other", GIT_AUTHOR_EMAIL: "other@example.com", GIT_COMMITTER_NAME: "Other", GIT_COMMITTER_EMAIL: "other@example.com" };
+	const tree = spawnSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/main^{tree}"], { encoding: "utf8" }).stdout.trim();
+	const parent = spawnSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"], { encoding: "utf8" }).stdout.trim();
+	return spawnSync("git", ["--git-dir", remote, "commit-tree", tree, "-p", parent, "-m", "newer work"], { encoding: "utf8", env }).stdout.trim();
+}
+
+test("land finishes after a later deletion failed, once the scope's stamped tip is already published", async () => {
+	const f = fixture("land-resume");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const tip = f.commit("idea.md", "an idea\n");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.checkout, "push", "-q", "origin", `${tip}:${legacy}`);
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	assert.notEqual(published, "", "the stamped work was published first");
+	assert.equal(f.onDeck(), id, "the dive is still on deck");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing was published twice or over");
+	assert.equal(f.remoteRef(legacy), "", "the dive's ref is gone");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("pack resumes after its dirty snapshot was published and a later deletion failed, recognising its own sha", async () => {
+	const f = fixture("pack-resume-dirty");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const oldTip = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, oldTip);
+	await jump({ ref: id }, f.ctx);
+	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const wip = f.remoteRef(own);
+	assert.notEqual(wip, oldTip, "the snapshot was published");
+	unlinkSync(hook);
+	await pack({}, f.ctx);
+	assert.equal(f.remoteRef(own), wip, "the retry recognised the snapshot as its own and published nothing new");
+	assert.equal(f.remoteRef(legacy), "");
+	assert.equal(git(f.remote, "show", `${wip}:draft.md`), "unsaved work");
+});
+
+test("pack refuses an own ref it did not publish, even when it is an ancestor of HEAD", async () => {
+	const f = fixture("pack-own-ancestor");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const first = f.commit("first.md", "first\n");
+	f.commit("second.md", "second\n");
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	git(f.checkout, "push", "-q", "origin", `${first}:${own}`);
+	await assert.rejects(pack({}, f.ctx), /which this dive did not see/);
+	assert.equal(f.remoteRef(own), first, "left as it was");
+	assert.equal(f.onDeck(), id);
+});
+
+test("land refuses to delete a dive ref holding newer work than the landed work or the recorded tip", async () => {
+	const f = fixture("land-newer-ref");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const newer = strayCommit(f.remote);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, newer);
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /work this dive did not see and the landed work does not hold/);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "nothing was pushed");
+	assert.equal(f.remoteRef(legacy), newer, "the newer work was not deleted");
+});
+
+test("a retry refuses a dive another invocation has landed meanwhile", async () => {
+	const f = fixture("pack-landed-meanwhile");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const parent = tempDir("pack-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	const doc = join(clone, "kb", `${id}.md`);
+	writeFileSync(doc, readFileSync(doc, "utf8").replace("\nmeta:\n", "\nmeta:\n  outcome: landed\n"));
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "landed elsewhere");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	await assert.rejects(pack({}, f.ctx), /is over: it landed/);
+	assert.equal(f.onDeck(), id, "nothing was put down");
+});
+
+test("an ignored path that became a directory during publication is left in place with its new work, and rebuildable ones are never deleted", async () => {
+	const f = fixture("pack-ignored-dir");
+	await jump({ ref: f.featId }, f.ctx);
+	writeFileSync(join(f.checkout, ".gitignore"), "secrets.local\nnode_modules/\n");
+	f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "before\n");
+	mkdirSync(join(f.checkout, "node_modules"));
+	writeFileSync(join(f.checkout, "node_modules", "dep.js"), "dep\n");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const target = join(f.checkout, "secrets.local").replace(/\\/g, "/");
+	writeFileSync(hook, `#!/bin/sh\nrm -f "${target}"\nmkdir "${target}"\nprintf 'new work\\n' > "${target}/new.txt"\nprintf 'changed meanwhile\\n' > "${join(f.checkout, "node_modules", "dep.js").replace(/\\/g, "/")}"\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(pack({}, f.ctx), /left in place, out of the pack: secrets\.local/);
+	assert.equal(readFileSync(join(f.checkout, "secrets.local", "new.txt"), "utf8"), "new work\n", "the new work is intact");
+	assert.equal(readFileSync(join(f.checkout, "node_modules", "dep.js"), "utf8"), "changed meanwhile\n", "a rebuildable file that is no longer the one seen is never deleted");
 });

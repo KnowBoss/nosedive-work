@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
@@ -216,6 +216,19 @@ export function homeUpdate(plan: HomePlan, tip: Sha, also: Iterable<Sha> = []): 
 	return { ref: `refs/heads/${plan.up.name}`, old: plan.upstream, new: tip, fastForward: true, publishes: new Set([...plan.set, ...also]) };
 }
 
+/**
+ * Refuses, on the home as just fetched and planned, a dive that is over or not held by this checkout: a retry works from a
+ * fresh fetch, and another invocation may have landed, bailed or taken the dive since this one began.
+ */
+export function assertHeld(hero: Hero, dive: Dive, tip: Sha): void {
+	const doc = docAt(hero.dir, tip, keyOf(hero, dive.doc));
+	const name = String(dive.doc.fm.name);
+	if (!doc) throw new Error(`dive ${name} is not on ${dive.home} as just fetched, so nothing was changed`);
+	const meta = (doc.fm.meta ?? {}) as { diver?: unknown; outcome?: unknown };
+	if (typeof meta.outcome === "string") throw new Error(`dive ${name} is over: it ${meta.outcome}, as ${dive.home} now has it, so nothing was changed`);
+	if (typeof meta.diver !== "string" || meta.diver.split("#")[1] !== dive.token) throw new Error(`dive ${name} is no longer held by this checkout, as ${dive.home} now has it, so nothing was changed`);
+}
+
 /** The commits `tip` adds to a remote ref that held `old`, as git lists them now; for a dive's own ref, every one of which is the dive's work (dive-work-is-the-divers). */
 export function diveWork(dir: string, tip: Sha, old: Sha | null): Set<Sha> {
 	return new Set(must(dir, "rev-list", tip, ...(old ? ["--not", old] : ["--not", "--remotes=origin"])).split("\n").filter(Boolean));
@@ -371,48 +384,87 @@ export function packIgnored(hero: Hero, featId: string, scope: { name: string; d
 }
 
 /** After publication, atomically moves ignored files into same-filesystem staging, then packs exactly those bytes. */
-function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }, files: string[], packed: string[], links: string[]): number {
+/** What a put-down will clear from a checkout: the files it packs, the rebuildable ones it only removes, each with its bytes' digest as seen, and the links it only unlinks. */
+export type IgnoredSeen = { packed: string[]; rebuildable: Map<string, string>; links: string[] };
+
+/** What is ignored in a checkout as it is now, each rebuildable file with a digest, so only that exact file is ever removed. */
+export function seeIgnored(hero: Hero, dir: string): IgnoredSeen {
+	const packed = ignoredFiles(hero, dir, false);
+	const rebuildable = new Map<string, string>();
+	for (const file of ignoredFiles(hero, dir, true)) {
+		if (packed.includes(file)) continue;
+		try {
+			rebuildable.set(file, createHash("sha256").update(readFileSync(join(dir, file))).digest("hex"));
+		} catch {}
+	}
+	return { packed, rebuildable, links: ignoredLinks(hero, dir) };
+}
+
+function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }, seen: IgnoredSeen): number {
+	const files = seen.packed;
 	const path = join(packsDir(hero), featId, `${scope.name}.zip`);
-	if (files.length === 0 && links.length === 0) {
+	if (files.length === 0 && seen.rebuildable.size === 0 && seen.links.length === 0) {
 		rmSync(path, { force: true });
 		return 0;
 	}
 	const staging = mkdtempSync(join(scope.dir, ".nosedive-pack-"));
 	const moved: string[] = [];
+	const left: string[] = [];
 	try {
 		for (const file of files) {
 			const from = join(scope.dir, file);
-			if (!existsSync(from)) continue;
+			// A path that is no longer a file, as it was when listed, is left where it is, whatever it now holds.
+			let isFile = false;
+			try {
+				isFile = lstatSync(from).isFile();
+			} catch {}
+			if (!isFile) {
+				left.push(file);
+				continue;
+			}
 			const to = join(staging, file);
 			mkdirSync(dirname(to), { recursive: true });
 			renameSync(from, to);
 			moved.push(file);
 		}
-		for (const link of links) {
-			const from = join(scope.dir, link);
-			if (!existsSync(from)) continue;
-			const to = join(staging, link);
-			mkdirSync(dirname(to), { recursive: true });
-			renameSync(from, to);
-		}
-		const captured = packed.filter((file) => moved.includes(file));
-		if (captured.length === 0) rmSync(path, { force: true });
+		// What is zipped is what was moved, whatever it held by then; only that is deleted.
+		if (moved.length === 0) rmSync(path, { force: true });
 		else {
 			mkdirSync(dirname(path), { recursive: true });
-			writeFileSync(path, zipSync(read(staging, captured)));
+			writeFileSync(path, zipSync(read(staging, moved)));
 		}
 		rmSync(staging, { recursive: true, force: true });
 		const dirs = new Set(moved.flatMap((file) => {
 			const parts = file.split("/");
 			return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 		}));
+		// A rebuildable file goes only if it is still the file that was seen; a link goes as a link, its target never touched.
+		for (const [file, digest] of seen.rebuildable) {
+			try {
+				const path = join(scope.dir, file);
+				if (lstatSync(path).isFile() && createHash("sha256").update(readFileSync(path)).digest("hex") === digest) {
+					unlinkSync(path);
+					const parts = file.split("/");
+					for (let i = parts.length - 1; i > 0; i--) dirs.add(parts.slice(0, i).join("/"));
+				}
+			} catch {}
+		}
+		for (const link of seen.links) {
+			const path = join(scope.dir, link);
+			try {
+				if (lstatSync(path).isSymbolicLink()) {
+					try { unlinkSync(path); } catch { rmdirSync(path); }
+				}
+			} catch {}
+		}
 		for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
 			try { rmdirSync(join(scope.dir, dir)); } catch {}
 		}
-		return captured.length;
 	} catch (error) {
 		throw new Error(`ignored files were kept in ${staging} because their pack could not be completed: ${(error as Error).message}`);
 	}
+	if (left.length > 0) throw new Error(`${scope.name} was put down, but ${left.length} ignored path${left.length === 1 ? " is" : "s are"} no longer the file listed and ${left.length === 1 ? "was" : "were"} left in place, out of the pack: ${left.join(", ")}`);
+	return moved.length;
 }
 
 /**
@@ -422,6 +474,8 @@ function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; 
 export function swapIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }): string | undefined {
 	const files = keepable(hero, scope.dir);
 	let orphaned: string | undefined;
+	// A file that changed after it was read for the orphan pack keeps its newer bytes, and is not overwritten from the feat's pack.
+	const kept = new Set<string>();
 	if (files.length > 0) {
 		const current = read(scope.dir, files);
 		const newest = newestPack(hero, scope.name);
@@ -430,11 +484,22 @@ export function swapIgnored(hero: Hero, featId: string, scope: { name: string; d
 			mkdirSync(dirname(orphaned), { recursive: true });
 			writeFileSync(orphaned, zipSync(current));
 		}
-		for (const file of files) rmSync(join(scope.dir, file), { force: true });
+		for (const file of files) {
+			const path = join(scope.dir, file);
+			let now: Buffer | undefined;
+			try {
+				now = readFileSync(path);
+			} catch {}
+			if (now && Buffer.compare(now, current[file]!) !== 0) kept.add(file);
+			else rmSync(path, { force: true });
+		}
 	}
 	const pack = join(packsDir(hero), featId, `${scope.name}.zip`);
 	if (existsSync(pack)) {
+		// A path the destination tracks is the tree's, never a pack entry's to overwrite.
+		const tracked = new Set(runGit(scope.dir, "ls-files").text.split("\n").filter(Boolean));
 		for (const [file, bytes] of Object.entries(unzipSync(new Uint8Array(readFileSync(pack))))) {
+			if (tracked.has(file) || kept.has(file)) continue;
 			mkdirSync(dirname(join(scope.dir, file)), { recursive: true });
 			writeFileSync(join(scope.dir, file), bytes);
 		}
@@ -674,6 +739,7 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	const upstream = fetchHome(hero, up);
 	// A home commit that is not nosedive's, or one that conflicts, is refused before anything is pushed (jump-publishes-nosedive-committed).
 	const homePlan = planHome(hero, home, up, upstream);
+	assertHeld(hero, dive, homePlan.tip);
 	const writable = dive.scopes.filter((scope) => scope.branch && scope.ours);
 	for (const scope of writable) fetchAll(scope.dir);
 	const puts: Put[] = [
@@ -681,6 +747,18 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 		{ key: hero.id!, name: "hero", dir: hero.dir, base: `refs/heads/${home}`, recorded: heroRef(hero, dive.doc), commits: [] },
 	];
 
+	// Before a sha goes to the dive's own ref, this checkout writes down, locally, that it is about to: a retry that finds the
+	// ref there knows it was this command's, which ancestry of HEAD can never say.
+	const pushedRef = (_dir: string, sha: string) => `refs/nosedive-pushed/${hero.id}/${id}/${sha}`;
+	// What this command would hold is worked out first. The same state on the same parent is the same commit, so a retry
+	// recognises its own earlier publish by sha, and anything else on the dive's own ref is refused.
+	for (const put of puts) {
+		put.head0 = must(put.dir, "rev-parse", "HEAD");
+		put.dirty = !!runGit(put.dir, "status", "--porcelain").text;
+		put.tip = put.dirty ? snapshot(put.dir, put.head0, wip(dive.doc), version).tip : put.head0;
+		put.commits = runGit(put.dir, "log", "--format=%h %s", `${put.base}..${put.tip}`).text.split("\n").filter(Boolean);
+		if (put.commits.length > 0) put.sha = put.tip;
+	}
 	// Every lease is checked before anything is committed or pushed, against what the dive doc recorded at its last jump
 	// or pack: local refs are no record, since any fetch into a repo's shared cache moves them. Each ref must hold the
 	// recorded commit or older work of the dive; the dive's own ref may also hold a commit this checkout has, its own
@@ -689,25 +767,17 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	const within = (dir: string, sha: string, tip: string | undefined) => tip !== undefined && runGit(dir, "merge-base", "--is-ancestor", sha, tip).ok;
 	const moved = puts.flatMap((put) => {
 		const current = observed.get(put.key)!;
-		if (current.length === 0 && put.recorded !== undefined) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
+		if (current.length === 0 && put.recorded !== undefined && put.sha) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
 		return current.flatMap(({ ref, sha }) => {
-			if (within(put.dir, sha, put.recorded) || (ref === own && within(put.dir, sha, "HEAD"))) return [];
+			if (within(put.dir, sha, put.recorded) || (ref === own && (sha === put.tip || sha === put.head0 || runGit(put.dir, "rev-parse", "--verify", "-q", pushedRef(put.dir, sha)).ok))) return [];
 			return [`${put.name}: ${ref} is at ${sha.slice(0, 7)}, which this dive did not see`];
 		});
 	});
 	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
 
-	// Uncommitted work is held in a commit off to the side; the checkout and its index are untouched until the commit.
-	for (const put of puts) {
-		put.head0 = must(put.dir, "rev-parse", "HEAD");
-		put.dirty = !!runGit(put.dir, "status", "--porcelain").text;
-		put.tip = put.dirty ? snapshot(put.dir, put.head0, wip(dive.doc), version).tip : put.head0;
-		put.commits = runGit(put.dir, "log", "--format=%h %s", `${put.base}..${put.tip}`).text.split("\n").filter(Boolean);
-		if (put.commits.length > 0) put.sha = put.tip;
-	}
 	const done: PutDown = { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own };
 	const made = recordOn(hero, homePlan.tip, keyOf(hero, dive.doc), record(done), version);
-	const ignored = new Map(writable.map((scope) => [scope.repoId, { files: ignoredFiles(hero, scope.dir, true), packed: ignoredFiles(hero, scope.dir, false), links: ignoredLinks(hero, scope.dir) }]));
+	const ignored = new Map(writable.map((scope) => [scope.repoId, seeIgnored(hero, scope.dir)]));
 
 	const branch = `refs/heads/${dive.branch}`;
 	const steps: Step[] = [];
@@ -728,8 +798,10 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 		if (put.dirty) moves.push({ ref: branch, old: put.head0!, new: put.tip! });
 		if (isHero) moves.push({ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip });
 		// The index catches up with the held work, the tree untouched, so the files can then follow.
+		const noted = runGit(put.dir, "for-each-ref", "--format=%(refname) %(objectname)", `refs/nosedive-pushed/${hero.id}/${id}`).text.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string]);
+		if (put.sha) steps.push({ repo: put.name, dir: put.dir, local: { moves: [{ ref: pushedRef(put.dir, put.sha), old: noted.find(([ref]) => ref === pushedRef(put.dir, put.sha!))?.[1] ?? null, new: put.sha }] } });
 		steps.push({ repo: put.name, dir: put.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves, ...(put.dirty ? { files: { from: put.tip!, to: put.tip!, index: put.tip! } } : {}) } });
-		const drop = [{ ref: branch, old: put.tip!, new: null }];
+		const drop: LocalMove[] = [{ ref: branch, old: put.tip!, new: null }, ...noted.filter(([ref]) => !put.sha || ref !== pushedRef(put.dir, put.sha!)).map(([ref, sha]) => ({ ref, old: sha, new: null })), ...(put.sha ? [{ ref: pushedRef(put.dir, put.sha), old: put.sha, new: null }] : [])];
 		if (isHero) after.push({ repo: put.name, dir: put.dir, local: { head: { from: { branch: dive.branch }, to: { branch: home } }, files: { from: put.tip!, to: made.tip }, drop } });
 		else {
 			const base = runGit(put.dir, "merge-base", put.tip!, put.base).text || must(put.dir, "rev-parse", put.base);
@@ -739,7 +811,7 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	carry({ steps, after }, command);
 	for (const scope of writable) {
 		const found = ignored.get(scope.repoId)!;
-		stageAndPackIgnored(hero, featOf(dive.doc), scope, found.files, found.packed, found.links);
+		stageAndPackIgnored(hero, featOf(dive.doc), scope, found);
 	}
 	for (const scope of dive.scopes.filter((each) => each.ours && !writable.includes(each))) packIgnored(hero, featOf(dive.doc), scope);
 	return done;

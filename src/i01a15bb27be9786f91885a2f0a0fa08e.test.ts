@@ -89,3 +89,20 @@ test("a dive's work in progress is told by its name, in the subject pack writes 
 	assert.equal(isWip(dive, "pack(ideas.other1): work in progress"), false, "legacy, another dive's");
 	assert.equal(isWip(dive, "add idea.md"), false);
 });
+
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { zipSync } from "fflate";
+import { swapIgnored } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+
+test("restoring a pack never overwrites a file the destination tracks", async () => {
+	const f = fixture("swap-tracked");
+	await jump({ ref: f.featId }, f.ctx);
+	const hero = findBridge(f.hero)!;
+	const pack = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");
+	mkdirSync(dirname(pack), { recursive: true });
+	writeFileSync(pack, zipSync({ "README.md": new TextEncoder().encode("from the pack\n"), "keep.local": new TextEncoder().encode("restored\n") }));
+	swapIgnored(hero, f.featId, { name: "data", dir: f.checkout });
+	assert.equal(readFileSync(join(f.checkout, "README.md"), "utf8"), "data\n", "the tracked file is the tree's");
+	assert.equal(readFileSync(join(f.checkout, "keep.local"), "utf8"), "restored\n", "an ignored entry comes back");
+});

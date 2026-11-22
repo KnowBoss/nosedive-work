@@ -759,3 +759,23 @@ test("the loop's code holds no reset --hard, no bare git push and no direct ref 
 		assert.doesNotMatch(text, /"reset"|"--hard"|"push"|"update-ref"|"rebase"|"cherry-pick"|"merge"|"branch", "-[dDf]"/, file);
 	}
 });
+
+test("jump keeps the commits of a dive branch it replaces, though HEAD is elsewhere, on an orphan ref with the warning", async () => {
+	const f = fixture("jump-off-head-branch");
+	await jump({ ref: f.featId }, f.ctx);
+	const local = f.commit("mine.md", "local only\n");
+	// The checkout moves off its dive branch, and the work branch on origin moves on meanwhile.
+	git(f.checkout, "checkout", "-q", "--detach", "origin/main");
+	const parent = tempDir("jump-data-other");
+	git(parent, "clone", "-q", f.remote, "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "theirs.md"), "theirs\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "theirs");
+	git(clone, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+	f.err.length = 0;
+	await jump({}, f.ctx);
+	const kept = `refs/nosedive-orphans/${f.heroId}/${local}`;
+	assert.equal(git(f.checkout, "rev-parse", kept), local, "the replaced branch's tip is kept");
+	assert.match(f.err.join("\n"), new RegExp(`under ${kept}:`));
+});
