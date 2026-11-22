@@ -1,11 +1,14 @@
 // pack [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
+import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
+import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
+import { fetchAll } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { unzipSync } from "fflate";
 import { fixture, git, tempDir } from "../test/harness.ts";
 
@@ -60,6 +63,27 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	assert.equal(git(f.checkout, "status", "--porcelain"), "M README.md\n?? draft.md", "uncommitted again");
 	assert.equal(readFileSync(join(f.checkout, "secrets.local"), "utf8"), "KEY=secret\n", "the feat's ignored files are back");
 	assert.doesNotMatch(f.doc(id), /packer:/);
+});
+
+test("an ignored file rewritten during publication is captured, never cleaned from an older path list", async () => {
+	const f = fixture("pack-ignored-race");
+	await jump({ ref: f.featId }, f.ctx);
+	writeFileSync(join(f.checkout, ".gitignore"), "secrets.local\n");
+	f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "before\n");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	writeFileSync(hook, `#!/bin/sh\nprintf 'during publish\\n' > "${join(f.checkout, "secrets.local").replace(/\\/g, "/")}"\nexit 0\n`, { mode: 0o755 });
+
+	await pack({}, f.ctx);
+
+	const zip = unzipSync(new Uint8Array(readFileSync(join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip"))));
+	assert.equal(new TextDecoder().decode(zip["secrets.local"]), "during publish\n");
+});
+
+test("fetchAll refuses a scope fetch failure", () => {
+	const f = fixture("fetch-all-failure");
+	renameSync(f.remote, `${f.remote}-offline`);
+	assert.throws(() => fetchAll(f.checkout), /cannot fetch origin/);
 });
 
 test("never packs or clears a workspace the checkout's own config names, nor the checkouts in it", async () => {
@@ -210,23 +234,17 @@ test("a stale per-ref lease stops cleanup after publication and keeps local work
 	git(f.remote, "update-ref", legacy, oldTip);
 	await jump({ ref: id }, f.ctx);
 	const target = f.commit("more.md", "more work\n");
-	const hook = join(f.remote, "hooks", "post-receive");
-	writeFileSync(hook, `#!/bin/sh
-while read old new ref; do
-  if [ "$ref" = "${own}" ]; then
-    git update-ref "${legacy}" "$new"
-  fi
-done
-`, { mode: 0o755 });
+	// Another checkout moves the legacy ref to a commit of its own while the push is on its way.
+	const remote = f.remote.replace(/\\/g, "/");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	writeFileSync(hook, `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\nG="git --git-dir=${remote}"\n$G update-ref "${legacy}" $(echo moved | $G -c user.name=Other -c user.email=other@example.com commit-tree $($G rev-parse refs/heads/main^{tree}))\nexit 0\n`, { mode: 0o755 });
 
 	await assert.rejects(pack({}, f.ctx), (error: unknown) => {
 		assert.match(String(error), new RegExp(legacy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-		assert.match(String(error), /stale info|expected|cannot lock ref/i);
 		return true;
 	});
-
-	assert.equal(f.remoteRef(own), target, "the destination was published first");
-	assert.equal(f.remoteRef(legacy), target, "the concurrent update was not deleted");
+	assert.equal(f.remoteRef(own), target, "work published first is a safe prefix when a later deletion is stale");
+	assert.notEqual(f.remoteRef(legacy), "", "the concurrent update was not deleted");
 	assert.equal(f.onDeck(), id, "the dive branch remains active");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), target, "scope work remains on its local branch");
 	unlinkSync(hook);
@@ -264,7 +282,7 @@ test("retries after partial cleanup across a scope and the hero", async () => {
 	assert.equal(f.remoteRef(dataA), "", "scope cleanup completed before the hero failure");
 	assert.equal(f.remoteRef(dataZ), "");
 	assert.equal(git(heroRemote, "rev-parse", heroLegacy), heroOriginal, "the failed deletion remains");
-	assert.equal(git(heroRemote, "rev-parse", `refs/nosedive/${f.heroId}/dives/${id}`), heroTarget);
+	assert.equal(git(heroRemote, "rev-parse", `refs/nosedive/${f.heroId}/dives/${id}`), heroTarget, "hero work published before the failed deletion, while the record stayed last");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), heroTarget, "hero work remains recoverable");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), dataTarget, "scope work remains recoverable");
 	assert.equal(f.onDeck(), id);
@@ -292,4 +310,362 @@ test("deletes all refs under lease when there is no work, including legacy names
 
 	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), "");
 	assert.ok(f.out.some((line) => line.includes("- data: no work")));
+});
+
+// Fix round 2: recovery from the partial prefixes a per-ref publish may leave, at the command level.
+
+/** A commit in a bare repo that no branch has, as another checkout's newer work on a dive ref would be. */
+function strayCommit(remote: string): string {
+	const env = { ...process.env, GIT_AUTHOR_NAME: "Other", GIT_AUTHOR_EMAIL: "other@example.com", GIT_COMMITTER_NAME: "Other", GIT_COMMITTER_EMAIL: "other@example.com" };
+	const tree = spawnSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/main^{tree}"], { encoding: "utf8" }).stdout.trim();
+	const parent = spawnSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"], { encoding: "utf8" }).stdout.trim();
+	return spawnSync("git", ["--git-dir", remote, "commit-tree", tree, "-p", parent, "-m", "newer work"], { encoding: "utf8", env }).stdout.trim();
+}
+
+test("land finishes after a later deletion failed, once the scope's stamped tip is already published", async () => {
+	const f = fixture("land-resume");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const tip = f.commit("idea.md", "an idea\n");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.checkout, "push", "-q", "origin", `${tip}:${legacy}`);
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	assert.notEqual(published, "", "the stamped work was published first");
+	assert.equal(f.onDeck(), id, "the dive is still on deck");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing was published twice or over");
+	assert.equal(f.remoteRef(legacy), "", "the dive's ref is gone");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("pack resumes after its dirty snapshot was published and a later deletion failed, recognising its own sha", async () => {
+	const f = fixture("pack-resume-dirty");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const oldTip = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, oldTip);
+	await jump({ ref: id }, f.ctx);
+	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const wip = f.remoteRef(own);
+	assert.notEqual(wip, oldTip, "the snapshot was published");
+	unlinkSync(hook);
+	await pack({}, f.ctx);
+	assert.equal(f.remoteRef(own), wip, "the retry recognised the snapshot as its own and published nothing new");
+	assert.equal(f.remoteRef(legacy), "");
+	assert.equal(git(f.remote, "show", `${wip}:draft.md`), "unsaved work");
+});
+
+test("bail resumes after its dirty snapshot was published and a later deletion failed", async () => {
+	const f = fixture("bail-resume-dirty");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const oldTip = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, oldTip);
+	await jump({ ref: id }, f.ctx);
+	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(bail({ reason: "superseded" }, f.ctx), /injected deletion failure/);
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const wip = f.remoteRef(own);
+	assert.notEqual(wip, oldTip, "the dirty snapshot was published before the refused deletion");
+	unlinkSync(hook);
+	await bail({ reason: "superseded" }, f.ctx);
+	assert.equal(f.remoteRef(own), wip, "the retry recognised its published snapshot");
+	assert.equal(f.remoteRef(legacy), "");
+	assert.match(f.doc(id), /outcome: bailed/);
+});
+
+test("pack resumes a no-work all-deletions plan after an earlier deletion succeeded", async () => {
+	const f = fixture("pack-resume-deletions");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const committed = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	git(f.checkout, "push", "-q", "origin", `${committed}:refs/heads/work/ideas`);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, committed);
+	await jump({ ref: id }, f.ctx);
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), "", "the own ref deletion was a safe completed prefix");
+	assert.equal(f.remoteRef(legacy), committed, "the refused deletion remains");
+	unlinkSync(hook);
+	await pack({}, f.ctx);
+	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), "");
+});
+
+test("pack refuses an own ref it did not publish, even when it is an ancestor of HEAD", async () => {
+	const f = fixture("pack-own-ancestor");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const first = f.commit("first.md", "first\n");
+	f.commit("second.md", "second\n");
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	git(f.checkout, "push", "-q", "origin", `${first}:${own}`);
+	await assert.rejects(pack({}, f.ctx), /which this dive did not see/);
+	assert.equal(f.remoteRef(own), first, "left as it was");
+	assert.equal(f.onDeck(), id);
+});
+
+test("land refuses to delete a dive ref holding newer work than the landed work or the recorded tip", async () => {
+	const f = fixture("land-newer-ref");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const newer = strayCommit(f.remote);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, newer);
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /work this dive did not see and the landed work does not hold/);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "nothing was pushed");
+	assert.equal(f.remoteRef(legacy), newer, "the newer work was not deleted");
+});
+
+test("land refuses to delete an unproven hero dive tip", async () => {
+	const f = fixture("land-newer-hero-ref");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const newer = strayCommit(heroRemote);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(heroRemote, "update-ref", legacy, newer);
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /work this dive did not see and the landed work does not hold/);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "nothing was pushed");
+	assert.equal(git(heroRemote, "rev-parse", legacy), newer, "the unproven hero work was not deleted");
+});
+
+test("a retry refuses a dive another invocation has landed meanwhile", async () => {
+	const f = fixture("pack-landed-meanwhile");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const parent = tempDir("pack-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	const doc = join(clone, "kb", `${id}.md`);
+	writeFileSync(doc, readFileSync(doc, "utf8").replace("\nmeta:\n", "\nmeta:\n  outcome: landed\n"));
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "landed elsewhere");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	await assert.rejects(pack({}, f.ctx), /is over: it landed/);
+	assert.equal(f.onDeck(), id, "nothing was put down");
+});
+
+test("an ignored path that became a directory during publication is left in place with its new work, and rebuildable ones are never deleted", async () => {
+	const f = fixture("pack-ignored-dir");
+	await jump({ ref: f.featId }, f.ctx);
+	writeFileSync(join(f.checkout, ".gitignore"), "secrets.local\nnode_modules/\n");
+	f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.checkout, "secrets.local"), "before\n");
+	mkdirSync(join(f.checkout, "node_modules"));
+	writeFileSync(join(f.checkout, "node_modules", "dep.js"), "dep\n");
+	const hook = join(git(f.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const target = join(f.checkout, "secrets.local").replace(/\\/g, "/");
+	writeFileSync(hook, `#!/bin/sh\nrm -f "${target}"\nmkdir "${target}"\nprintf 'new work\\n' > "${target}/new.txt"\nprintf 'changed meanwhile\\n' > "${join(f.checkout, "node_modules", "dep.js").replace(/\\/g, "/")}"\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(pack({}, f.ctx), /left in place, out of the pack: secrets\.local/);
+	assert.equal(readFileSync(join(f.checkout, "secrets.local", "new.txt"), "utf8"), "new work\n", "the new work is intact");
+	assert.equal(readFileSync(join(f.checkout, "node_modules", "dep.js"), "utf8"), "changed meanwhile\n", "a rebuildable file that is no longer the one seen is never deleted");
+});
+
+test("land finishes the cleanup of a landed record it published, when a hero ref deletion failed", async () => {
+	const f = fixture("land-hero-cleanup");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	assert.match(git(heroRemote, "log", "-1", "--format=%s", "refs/heads/main"), /^land\(/, "the landed record was published");
+	assert.equal(f.onDeck(), id, "the dive is still on deck here");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the remaining cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over here too");
+	assert.equal(git(heroRemote, "rev-list", "--count", "refs/heads/main", "--grep=^land("), "1", "no second record");
+});
+
+test("a retry refuses a dive someone else landed, whatever marker this checkout holds", async () => {
+	const f = fixture("land-someone-else");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const parent = tempDir("land-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	const doc = join(clone, "kb", `${id}.md`);
+	writeFileSync(doc, readFileSync(doc, "utf8").replace("\nmeta:\n", "\nmeta:\n  outcome: landed\n"));
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "landed elsewhere");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	await assert.rejects(land({}, f.ctx), /is over: it landed/);
+});
+
+test("land finishes its cleanup when someone pushed a commit on top of its landed record, without rewinding the home", async () => {
+	const f = fixture("land-record-buried");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const parent = tempDir("land-buried");
+	git(parent, "clone", "-q", heroRemote, "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "later.md"), "later\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "later work");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	const tip = git(heroRemote, "rev-parse", "refs/heads/main");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over here");
+	assert.equal(git(f.hero, "rev-parse", "main"), tip, "the home is at the latest published tip, not rewound to the record");
+	assert.equal(git(heroRemote, "rev-parse", "refs/heads/main"), tip, "and nothing was pushed");
+});
+
+test("a land rerun lands the dive as it is now, fast-forwarding what the failed run published, and names the commits that run had not", async () => {
+	const f = fixture("land-rerun-current");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	const late = f.commit("late.md", "made after the failure\n");
+	writeFileSync(join(f.hero, "late-hero.md"), "hero work after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
+	unlinkSync(hook);
+	f.out.length = 0;
+	await land({}, f.ctx);
+	assert.equal(git(f.remote, "rev-list", "--count", `${published}..refs/heads/work/ideas`), "1", "the rerun fast-forwarded from what the failed run published");
+	assert.equal(git(f.remote, "merge-base", published, "refs/heads/work/ideas"), published);
+	assert.equal(git(f.remote, "show", "refs/heads/work/ideas:late.md"), "made after the failure");
+	assert.equal(git(heroRemote, "show", "refs/heads/main:late-hero.md"), "hero work after the failure");
+	const said = f.out.join("\n");
+	assert.match(said, /commits the failed land had not published/);
+	assert.match(said, new RegExp(`${late.slice(0, 7)} add late\\.md`));
+	assert.match(said, /[0-9a-f]{7} late hero work/);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("a land rerun whose plan would rewrite what the failed run published refuses instead", async () => {
+	const f = fixture("land-rerun-rewrite");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	git(f.checkout, "reset", "-q", "--hard", "HEAD~1");
+	f.commit("other.md", "a different history\n");
+	unlinkSync(hook);
+	await assert.rejects(land({}, f.ctx), /has moved to/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing was rewritten");
+});
+
+test("a re-plan inside one land run never publishes a commit made while it ran", async () => {
+	const f = fixture("land-pinned");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const parent = tempDir("land-pinned-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone").replace(/\\/g, "/");
+	const guard = join(parent, "ran").replace(/\\/g, "/");
+	const scope = f.checkout.replace(/\\/g, "/");
+	const hook = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const person = `git -c user.name=O -c user.email=o@example.com`;
+	// While the hero's push is on its way: a commit lands on the scope's dive branch, and the home moves, so the run plans again.
+	writeFileSync(hook, `#!/bin/sh\ncase "$(cat)" in *" refs/heads/main "*) ;; *) exit 0;; esac\n[ -e "${guard}" ] && exit 0\n: > "${guard}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${scope}" && echo late > late.md && git add -A && ${person} commit -qm made-during-the-run\ncd "${clone}" && echo x > x.md && git add -A && ${person} commit -qm other && git push -q origin HEAD:main\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
+	assert.doesNotMatch(git(f.remote, "ls-tree", "-r", "--name-only", "refs/heads/work/ideas"), /late\.md/, "the commit made during the run was not published");
+});
+
+test("a rerun names the commits the failed run had not published even when the hero record never reached the home", async () => {
+	const f = fixture("land-rerun-names-no-record");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const guard = join(tempDir("land-names-guard"), "open").replace(/\\/g, "/");
+	const hook = join(heroRemote, "hooks", "pre-receive");
+	// The hero's home refuses its push until the guard file exists, so the scope is published and the record is not.
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = "refs/heads/main" ] && [ ! -e "${guard}" ]; then\n    echo "injected home refusal" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /injected home refusal/);
+	const late = f.commit("late.md", "made after the failure\n");
+	writeFileSync(join(f.hero, "late-hero.md"), "hero work after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
+	writeFileSync(guard, "");
+	f.out.length = 0;
+	await land({}, f.ctx);
+	const said = f.out.join("\n");
+	assert.match(said, /commits the failed land had not published/);
+	assert.match(said, new RegExp(`${late.slice(0, 7)} add late\\.md`));
+	assert.match(said, /[0-9a-f]{7} late hero work/);
+});
+
+test("a commit made on a scope after the run took its tips is never planned or published by that run", async () => {
+	const f = fixture("land-snapshot-tips");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const parent = tempDir("land-snapshot-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "x.md"), "x\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "-m", "other");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	const guard = join(parent, "ran").replace(/\\/g, "/");
+	const scope = f.checkout.replace(/\\/g, "/");
+	const hook = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "reference-transaction");
+	// The run's own fetch of the moved home fires this, after the tips were taken and before anything is planned.
+	writeFileSync(hook, `#!/bin/sh\n[ "$1" = committed ] || exit 0\ncase "$(cat)" in *refs/remotes/origin/main*) ;; *) exit 0;; esac\n[ -e "${guard}" ] && exit 0\n: > "${guard}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${scope}" && echo late > late.md && git add -A && git -c user.name=O -c user.email=o@example.com commit -qm made-after-the-tips\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
+});
+
+test("a hero commit made between reading the dive and taking the tips is refused, not published under the older read", async () => {
+	const f = fixture("land-hero-after-read");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	let done = false;
+	// The cape's version is read right after the dive is, before the run takes its tips: a commit lands in between.
+	const cape = { ...f.ctx.capes[0]! };
+	Object.defineProperty(cape, "version", {
+		get() {
+			if (!done) {
+				done = true;
+				writeFileSync(join(f.hero, "late-hero.md"), "made after the dive was read\n");
+				git(f.hero, "add", "-A");
+				git(f.hero, "commit", "-q", "-m", "late hero work");
+			}
+			return "test";
+		},
+	});
+	await assert.rejects(land({}, { ...f.ctx, capes: [cape, ...f.ctx.capes.slice(1)] }), /gained commits while this run was publishing/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
+	assert.equal(spawnSync("git", ["cat-file", "-e", "refs/heads/main:late-hero.md"], { cwd: heroRemote }).status === 0, false);
 });

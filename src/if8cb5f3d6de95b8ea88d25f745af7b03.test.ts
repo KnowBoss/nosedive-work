@@ -1,6 +1,7 @@
 // jump [<ref>]
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
@@ -8,9 +9,10 @@ import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
-import { fixture, git } from "../test/harness.ts";
+import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
+import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { diveBranch, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { diveBranch, putTurnOnHome, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 /** The dive branch a dive jumped from the hero's main has. */
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
@@ -221,7 +223,7 @@ test("replays the dive's hero work on its bookkeeping, and refuses while the hom
 	git(f.hero, "commit", "-q", "-m", "a draft");
 	await land({}, f.ctx);
 	git(f.hero, "commit", "-q", "--allow-empty", "-m", "stray");
-	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks: push it first; a turn that could not be pushed is one, which the next turn, pack or land of its dive pushes/);
+	await assert.rejects(jump({ ref: f.featId, sure: true }, f.ctx), /main holds 1 commit origin\/main lacks that nosedive did not commit: push or drop it first:\n {2}[0-9a-f]{7} stray$/);
 });
 
 test("moves a checkout left from other work, keeping commits origin lacks on an orphan ref, and refuses one with uncommitted changes", async () => {
@@ -240,10 +242,13 @@ test("moves a checkout left from other work, keeping commits origin lacks on an 
 	await jump({ ref: planned }, f.ctx);
 	const id = f.onDeck();
 	assert.equal(id, planned);
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/orphans/${stray}`), stray);
+	const kept = `refs/nosedive-orphans/${f.heroId}/${stray}`;
+	assert.equal(f.remoteRef(kept), "", "never pushed");
+	assert.equal(git(f.checkout, "rev-parse", kept), stray, "kept on a local ref");
+	assert.match(f.err.join("\n"), new RegExp(`warning: data holds 1 commit no ref on origin has, which are on this machine only, under ${kept}:\\n {2}${stray.slice(0, 7)} add stray\\.md\\nto recover it: git switch -c <name> ${kept}`));
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.remoteRef("refs/heads/work/ideas"), "a feat's dives stack on its work branch");
-	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept on refs/nosedive/${f.heroId}/orphans/${stray}\\n$`));
+	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept on ${kept}, on this machine only\\n$`));
 });
 
 test("a feat under a hero's second root gets its dive in that root's directory, and packs and jumps again", async () => {
@@ -326,11 +331,203 @@ function newSchema(f: ReturnType<typeof fixture>): string {
 	return version;
 }
 
-test("refuses a home with no upstream, so no record is stranded in a local branch", async () => {
+test("refuses a home with no upstream that is not cut from origin's trunk, so no record is stranded in a local branch", async () => {
 	const f = fixture("jump-upstream");
-	git(f.hero, "switch", "-q", "-c", "local-only");
+	git(f.hero, "switch", "-q", "--orphan", "local-only");
+	git(f.hero, "checkout", "main", "--", ".");
+	git(f.hero, "commit", "-q", "--allow-empty", "-m", "unrelated");
 	await assert.rejects(jump({ ref: f.featId }, f.ctx), /local-only has no upstream, so the dive's records would be stranded here: push it first, as `git push -u origin local-only`$/);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "local-only", "nothing moved");
+});
+
+type F = ReturnType<typeof fixture>;
+const NOSEDIVE = { GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" };
+
+/** A linked worktree of the hero on a new branch cut from main, with no upstream, as a Claude Code worktree is. */
+function worktree(f: F, name: string): string {
+	const dir = join(tempDir("jump-wt"), name);
+	git(f.hero, "worktree", "add", "-q", "-b", name, dir, "main");
+	return dir;
+}
+
+/** Commits a file as nosedive would, a person its author. */
+function own(dir: string, file: string, text: string, subject: string): void {
+	writeFileSync(join(dir, file), text);
+	git(dir, "add", "-A");
+	const made = spawnSync("git", ["commit", "-q", "-m", subject], { cwd: dir, env: { ...process.env, ...NOSEDIVE }, encoding: "utf8" });
+	assert.equal(made.status, 0, made.stderr);
+}
+
+/** A clone of the hero's origin, which pushes commits to main as someone else. */
+function other(f: F): { push(file: string, text: string, subject?: string): string; dir: string } {
+	const parent = tempDir("jump-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const dir = join(parent, "clone");
+	return {
+		dir,
+		push(file, text, subject = "upstream moved") {
+			writeFileSync(join(dir, file), text);
+			git(dir, "add", "-A");
+			git(dir, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", subject);
+			git(dir, "push", "-q", "origin", "HEAD:main");
+			return git(dir, "rev-parse", "HEAD");
+		},
+	};
+}
+
+const originMain = (f: F) => git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
+const diveRefs = (f: F) => git(f.hero, "ls-remote", "origin", "refs/nosedive/*");
+
+test("a fresh linked worktree with no upstream, a plan commit nosedive made and an upstream that moved, is jumped with no hand git: trunk adopted, the commit replayed and published", async () => {
+	const f = fixture("jump-fresh");
+	const wt = worktree(f, "worktree-agent");
+	const id = f.plan("Do the fresh part", true, wt);
+	const moved = other(f).push("other.md", "moved\n");
+	const ctx = { ...f.ctx, cwd: wt };
+	await jump({ ref: id }, ctx);
+
+	assert.equal(git(wt, "config", "branch.worktree-agent.merge"), "refs/heads/main");
+	assert.match(f.out.join("\n"), /jump: worktree-agent had no upstream; set it to origin\/main, which it is cut from\n/);
+	assert.match(f.out.join("\n"), /jump: published 1 commit nosedive made on worktree-agent to origin\/main with its record:\n[0-9a-f]{7} plan a dive\n/);
+	const published = git(wt, "rev-parse", "worktree-agent");
+	assert.equal(originMain(f), published, "published, the record on top");
+	assert.deepEqual(git(wt, "log", "--format=%s", `${moved}..${published}`).split("\n"), [`jump(ideas.${id.slice(-6)}): diver@example.com picked it up`, "plan a dive"]);
+	assert.equal(git(wt, "log", "-1", "--format=%cn <%ce>", "worktree-agent^"), "nosedive <noreply@nosedive.dev>", "the replayed commit keeps nosedive as committer");
+	assert.equal(git(wt, "log", "-1", "--format=%an", "worktree-agent^"), "Work Test", "and its author");
+});
+
+test("a commit made by core's commitFiles is one jump publishes", async () => {
+	const f = fixture("jump-producer");
+	const wt = worktree(f, "worktree-agent");
+	writeFileSync(join(wt, "note.md"), "a note\n");
+	commitFiles(wt, [join(wt, "note.md")], "add a note", "test");
+	await jump({ ref: f.featId }, { ...f.ctx, cwd: wt });
+	assert.match(f.out.join("\n"), /jump: published 1 commit nosedive made on worktree-agent to origin\/main with its record:\n[0-9a-f]{7} add a note\n/);
+});
+
+test("a home commit a person made is refused and listed, with nothing rewritten or published, and no upstream left set", async () => {
+	const f = fixture("jump-hand");
+	const wt = worktree(f, "worktree-agent");
+	const id = f.plan("Do the hand part", true, wt);
+	git(wt, "commit", "-q", "--allow-empty", "-m", "by hand");
+	const before = git(wt, "rev-parse", "worktree-agent");
+	const tip = other(f).push("other.md", "moved\n");
+	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: wt }), /worktree-agent holds 1 commit origin\/main lacks that nosedive did not commit: push or drop it first:\n {2}[0-9a-f]{7} by hand$/);
+	assert.equal(git(wt, "rev-parse", "worktree-agent"), before, "nothing rewritten");
+	assert.equal(originMain(f), tip, "nothing published");
+	assert.equal(git(wt, "symbolic-ref", "--short", "HEAD"), "worktree-agent", "nothing moved");
+	assert.equal(spawnSync("git", ["config", "branch.worktree-agent.merge"], { cwd: wt, encoding: "utf8" }).stdout.trim(), "", "the upstream jump set is taken back");
+});
+
+test("a replay that conflicts with the moved upstream changes and publishes nothing", async () => {
+	const f = fixture("jump-conflict");
+	const wt = worktree(f, "worktree-agent");
+	const id = f.plan("Do the conflicting part", true, wt);
+	const tip = other(f).push(`kb/${id}.md`, "someone else's\n", "same file");
+	const before = git(wt, "rev-parse", "worktree-agent");
+	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: wt }), /the 1 commit nosedive made on worktree-agent conflicts with origin\/main as it moved, so nothing was changed: push or drop it first/);
+	assert.equal(git(wt, "rev-parse", "worktree-agent"), before);
+	assert.equal(originMain(f), tip);
+});
+
+test("a multi-commit replay drops a commit the upstream already holds, and publishes the rest in order", async () => {
+	const f = fixture("jump-multi");
+	const wt = worktree(f, "worktree-agent");
+	const id = f.plan("Do the multiple part", true, wt);
+	own(wt, "b.md", "b\n", "add b");
+	own(wt, "c.md", "c\n", "add c");
+	other(f).push("b.md", "b\n", "b by someone else");
+	await jump({ ref: id }, { ...f.ctx, cwd: wt });
+	assert.match(f.out.join("\n"), /jump: published 2 commits nosedive made on worktree-agent to origin\/main with its record:\n[0-9a-f]{7} plan a dive\n[0-9a-f]{7} add c\n/);
+	assert.deepEqual(git(wt, "log", "--format=%s", "-5", "worktree-agent").split("\n").slice(1, 4), ["add c", "plan a dive", "b by someone else"]);
+	assert.equal(originMain(f), git(wt, "rev-parse", "worktree-agent"));
+});
+
+test("a push the remote rejects because it moved between fetch and push is planned again from the new tip, and published", async () => {
+	const f = fixture("jump-race");
+	const wt = worktree(f, "worktree-agent");
+	const id = f.plan("Do the racing part", true, wt);
+	const clone = other(f);
+	// The remote moves after push has looked at it, once.
+	const marker = join(tempDir("jump-hook"), "ran");
+	const hook = join(git(wt, "rev-parse", "--git-common-dir").replace(/\\/g, "/"), "hooks", "pre-push");
+	writeFileSync(hook, `#!/bin/sh\nif [ -e "${marker.replace(/\\/g, "/")}" ]; then exit 0; fi\ntouch "${marker.replace(/\\/g, "/")}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${clone.dir.replace(/\\/g, "/")}" || exit 1\necho raced > raced.md\ngit add -A\ngit -c user.name=Other -c user.email=other@example.com commit -q -m raced\ngit push -q origin HEAD:main\nexit 0\n`);
+	chmodSync(hook, 0o755);
+	await jump({ ref: id }, { ...f.ctx, cwd: wt });
+	rmSync(hook);
+	assert.equal(existsSync(marker), true, "the remote did move");
+	assert.deepEqual(git(wt, "log", "--format=%s", "-3", "worktree-agent").split("\n").slice(1), ["plan a dive", "raced"]);
+	assert.equal(originMain(f), git(wt, "rev-parse", "worktree-agent"));
+});
+
+test("a failed fetch refuses with nothing changed, rather than go on with a stale tracking ref", async () => {
+	const f = fixture("jump-offline");
+	const id = f.plan("Do the offline part");
+	git(f.hero, "remote", "set-url", "origin", join(tempDir("jump-gone"), "gone.git"));
+	const before = git(f.hero, "rev-parse", "HEAD");
+	await assert.rejects(jump({ ref: id }, f.ctx), /cannot fetch origin\/main, so nothing was changed \(offline, or the branch is gone\?\)/);
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), before);
+	const wt = worktree(f, "worktree-agent");
+	await assert.rejects(jump({ ref: id }, { ...f.ctx, cwd: wt }), /cannot reach origin to find worktree-agent's trunk, so nothing was changed \(offline\?\)/, "offline is not a home with no upstream");
+	assert.equal(spawnSync("git", ["config", "branch.worktree-agent.merge"], { cwd: wt, encoding: "utf8" }).stdout.trim(), "");
+});
+
+for (const state of ["stale", "missing"] as const) {
+	test(`adopts the trunk origin names, with the local origin/HEAD ${state}`, async () => {
+		const f = fixture(`jump-default-${state}`);
+		const origin = git(f.hero, "remote", "get-url", "origin");
+		git(f.hero, "push", "-q", "origin", "main:refs/heads/trunk2");
+		git(origin, "symbolic-ref", "HEAD", "refs/heads/trunk2");
+		if (state === "stale") git(f.hero, "remote", "set-head", "origin", "main");
+		else spawnSync("git", ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"], { cwd: f.hero });
+		const wt = worktree(f, "worktree-agent");
+		await jump({ ref: f.featId }, { ...f.ctx, cwd: wt });
+		assert.match(f.out.join("\n"), /jump: worktree-agent had no upstream; set it to origin\/trunk2, which it is cut from\n/);
+		assert.equal(git(wt, "config", "branch.worktree-agent.merge"), "refs/heads/trunk2");
+	});
+}
+
+/** A jumped dive whose home, main, holds a commit nosedive made that conflicts with the upstream as it moved. */
+async function conflicted(label: string) {
+	const f = fixture(label);
+	await jump({ ref: f.featId }, f.ctx);
+	const dive = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	f.commit("idea.md", "an idea\n");
+	git(f.hero, "checkout", "-q", "main");
+	own(f.hero, "clash.md", "mine\n", "a turn");
+	git(f.hero, "checkout", "-q", dive);
+	other(f).push("clash.md", "theirs\n", "clash");
+	return { f, dive };
+}
+
+test("pack and bail, finding the home's replay conflicts, push nothing, delete nothing and leave the dive on deck", async () => {
+	const puts = [(ctx: F["ctx"]) => pack({}, ctx), (ctx: F["ctx"]) => bail({ reason: "a test" }, ctx)];
+	for (const put of puts) {
+		const { f, dive } = await conflicted("jump-put-conflict");
+		const refs = diveRefs(f);
+		const tip = originMain(f);
+		await assert.rejects(put(f.ctx), /conflicts with origin\/main as it moved, so nothing was changed/);
+		assert.equal(diveRefs(f), refs, "no dive ref pushed or deleted");
+		assert.equal(originMain(f), tip);
+		assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), dive, "still on the dive branch");
+		assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), dive, "and its checkout");
+	}
+});
+
+test("a home checked out in another worktree is left alone: land refuses, naming it, before anything is pushed", async () => {
+	const f = fixture("jump-elsewhere");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const wt = join(tempDir("jump-wt"), "main-copy");
+	git(f.hero, "worktree", "add", "-q", wt, "main");
+	own(wt, "turn.md", "a turn\n", "a turn");
+	other(f).push("other.md", "moved\n");
+	const tip = originMain(f);
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /main is checked out in .*main-copy, which a moved branch would leave confused; nothing was changed/);
+	assert.equal(originMain(f), tip);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "no scope pushed");
+	assert.equal(git(wt, "log", "-1", "--format=%s"), "a turn", "the other checkout untouched");
 });
 
 test("a dive jumped from a pushed branch keeps every record and its hero work there, trunk untouched, and the loop returns to it", async () => {
@@ -403,4 +600,182 @@ test("a dive legacy left held by a bare email is taken over by a checkout of tha
 	await jump({ ref: id }, f.ctx);
 	assert.equal(f.onDeck(), id);
 	assert.match(f.doc(id), /\n  diver: diver@example\.com#[0-9a-f]{12}\n/);
+});
+
+/** Commits a file a person made, with an author, date and subject fixed, so two of them differ only in content. */
+function alike(dir: string, file: string, text: string): void {
+	writeFileSync(join(dir, file), text);
+	git(dir, "add", "-A");
+	const env = { ...process.env, GIT_AUTHOR_NAME: "Alike", GIT_AUTHOR_EMAIL: "alike@example.com", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z" };
+	const made = spawnSync("git", ["-c", "user.name=Someone", "-c", "user.email=someone@example.com", "commit", "-q", "-m", "alike"], { cwd: dir, env, encoding: "utf8" });
+	assert.equal(made.status, 0, made.stderr);
+}
+
+// Publishing is concurrency safe (jump-publish-is-concurrency-safe)
+
+/**
+ * Makes each push to `main` from `dir` run a step first, as a pre-push hook does, so a test can have the world change while
+ * the push is in flight: the first push runs `steps[0]`, the second `steps[1]`, and any later one nothing. A step is shell.
+ */
+function raceOnMain(dir: string, steps: string[]): void {
+	const state = tempDir("race");
+	const slash = (path: string) => path.replace(/\\/g, "/");
+	steps.forEach((step, i) => writeFileSync(join(state, `step${i + 1}.sh`), `${step}\n`));
+	const hook = join(git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const script = [
+		"#!/bin/sh",
+		'input=$(cat)',
+		'case "$input" in *" refs/heads/main "*) ;; *) exit 0;; esac',
+		`n=$(cat "${slash(state)}/n" 2>/dev/null || echo 0)`,
+		"n=$((n+1))",
+		`echo $n > "${slash(state)}/n"`,
+		`[ -f "${slash(state)}/step$n.sh" ] || exit 0`,
+		"unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE",
+		`sh "${slash(state)}/step$n.sh" >/dev/null 2>&1`,
+		"exit 0",
+		"",
+	].join("\n");
+	writeFileSync(hook, script);
+	chmodSync(hook, 0o755);
+}
+
+const sh = (path: string) => path.replace(/\\/g, "/");
+const PERSON = `git -c user.name=Other -c user.email=other@example.com`;
+
+test("pack and bail meet a replay conflict that only shows on a push retry before anything is torn down", async () => {
+	const puts = [(ctx: F["ctx"]) => pack({}, ctx), (ctx: F["ctx"]) => bail({ reason: "a test" }, ctx)];
+	for (const put of puts) {
+		const f = fixture("jump-retry-conflict");
+		await jump({ ref: f.featId }, f.ctx);
+		const dive = git(f.hero, "symbolic-ref", "--short", "HEAD");
+		f.commit("idea.md", "an idea\n");
+		git(f.hero, "checkout", "-q", "main");
+		own(f.hero, "clash.md", "mine\n", "a turn");
+		git(f.hero, "checkout", "-q", dive);
+		// Nothing clashes when pack looks; the remote moves with a clash once its push is on the way.
+		const clone = other(f);
+		raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\necho theirs > clash.md\ngit add -A\n${PERSON} commit -q -m clash\ngit push -q origin HEAD:main`]);
+		const refs = diveRefs(f);
+		await assert.rejects(put(f.ctx), /conflicts with origin\/main as it moved, so nothing was changed/);
+		assert.equal(diveRefs(f), refs, "no dive ref pushed or deleted");
+		assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), dive, "still on the dive branch");
+		assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), dive, "and its checkout");
+	}
+});
+
+test("a turn is kept off a home that holds a commit a person made, and nothing of it is pushed", async () => {
+	const f = fixture("turn-person");
+	await jump({ ref: f.featId }, f.ctx);
+	const tree = join(tempDir("jump-wt"), "main-copy");
+	git(f.hero, "worktree", "add", "-q", tree, "main");
+	alike(tree, "a.md", "mine\n");
+	git(f.hero, "worktree", "remove", "--force", tree);
+	own(f.hero, "turn.md", "a turn\n", "a turn");
+	const before = originMain(f);
+	const home = git(f.hero, "rev-parse", "main");
+	const outcome = putTurnOnHome(findBridge(f.hero)!, "main", git(f.hero, "rev-parse", "HEAD"));
+	assert.equal(outcome.kind, "dive-branch-only");
+	assert.match("why" in outcome ? outcome.why : "", /main holds 1 commit origin\/main lacks that nosedive did not commit/);
+	assert.equal(originMain(f), before, "nothing published");
+	assert.equal(git(f.hero, "rev-parse", "main"), home, "the home is as it was");
+});
+
+test("a jump of a doc the hero does not know changes nothing: no upstream set, nothing published", async () => {
+	const f = fixture("jump-unknown");
+	const wt = worktree(f, "worktree-agent");
+	f.plan("Do the unknown part", true, wt);
+	const before = originMain(f);
+	const at = git(wt, "rev-parse", "worktree-agent");
+	await assert.rejects(jump({ ref: mintUuid() }, { ...f.ctx, cwd: wt }), /no doc [0-9a-f-]+ in the hero on worktree-agent/);
+	assert.equal(originMain(f), before, "nothing published");
+	assert.equal(git(wt, "rev-parse", "worktree-agent"), at);
+	assert.equal(spawnSync("git", ["config", "branch.worktree-agent.merge"], { cwd: wt, encoding: "utf8" }).stdout.trim(), "", "no upstream set");
+
+	// With an upstream already, the same.
+	own(f.hero, "mine.md", "mine\n", "a turn");
+	await assert.rejects(jump({ ref: mintUuid() }, f.ctx), /no doc [0-9a-f-]+ in the hero on main/);
+	assert.equal(originMain(f), before, "nothing published");
+});
+
+// One publish primitive (one-publish-primitive): the commands' concurrency tests, with the races injected at exact points.
+
+test("T2: a commit a person makes on the home while the record is pushed is never published, and is kept", async () => {
+	const f = fixture("jump-t2");
+	raceOnMain(f.hero, [`cd "${sh(f.hero)}"\necho person > person.md\ngit add -A\ngit -c user.name=Person -c user.email=person@example.com commit -q -m person`]);
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), /holds 1 commit origin\/main lacks that nosedive did not commit/);
+	assert.equal(git(f.hero, "log", "-1", "--format=%s", "main"), "person", "the person's commit is still on the home");
+	assert.equal(git(f.hero, "ls-tree", "--name-only", originMain(f)).includes("person.md"), false, "origin never has it");
+	assert.equal(existsSync(join(f.hero, "person.md")), true, "nor is the file gone");
+});
+
+test("T6: a remote rewound while the home is pushed is refused by the lease, and a person's commit is not republished", async () => {
+	const f = fixture("jump-t6");
+	const clone = other(f);
+	const base = git(clone.dir, "rev-parse", "HEAD");
+	clone.push("h.md", "h\n", "by a person");
+	git(f.hero, "fetch", "-q", "origin");
+	git(f.hero, "merge", "-q", "--ff-only", "origin/main");
+	own(f.hero, "n.md", "n\n", "a turn");
+	raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\ngit push -q --force origin ${base}:refs/heads/main`]);
+	await assert.rejects(jump({ ref: f.featId }, f.ctx), /holds 1 commit origin\/main lacks that nosedive did not commit/);
+	assert.equal(originMain(f), base, "nothing republished");
+});
+
+test("T7: land meets the hero's replay conflict before any scope is pushed or stamped", async () => {
+	const f = fixture("land-t7");
+	await jump({ ref: f.featId }, f.ctx);
+	const work = f.commit("idea.md", "an idea\n");
+	writeFileSync(join(f.hero, "clash.md"), "mine\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "hero work");
+	other(f).push("clash.md", "theirs\n", "clash");
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /the hero's work conflicts with main, so nothing was landed/);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "the work branch was not pushed");
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), work, "no stamp left on the scope");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branchOf(f, f.onDeck()), "still on the dive");
+});
+
+test("T1: pack meets a conflict that appears between the plan and the push, and changes nothing anywhere", async () => {
+	const f = fixture("pack-t1");
+	await jump({ ref: f.featId }, f.ctx);
+	const dive = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	f.commit("idea.md", "an idea\n");
+	git(f.hero, "checkout", "-q", "main");
+	own(f.hero, "clash.md", "mine\n", "a turn");
+	git(f.hero, "checkout", "-q", dive);
+	const clone = other(f);
+	raceOnMain(f.hero, [`cd "${sh(clone.dir)}"\necho theirs > clash.md\ngit add -A\n${PERSON} commit -q -m clash\ngit push -q origin HEAD:main`]);
+	const refs = diveRefs(f);
+	await assert.rejects(pack({}, f.ctx), /conflict/);
+	assert.equal(diveRefs(f), refs, "no dive ref pushed or deleted");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), dive);
+	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), dive);
+});
+
+test("the loop's code holds no reset --hard, no bare git push and no direct ref move: only core's primitive pushes", () => {
+	for (const file of ["i01a15bb27be9786f91885a2f0a0fa08e", "if8cb5f3d6de95b8ea88d25f745af7b03", "i0735c57383365d4ca5395ea24f5b0649", "iffc777778a63553ba90babcc038eb748", "i2bcf8d7ee2645df5b261ee1b2135d190", "i01a18f6b14f97ca38a091f6b31317223"]) {
+		const text = readFileSync(new URL(`./${file}.ts`, import.meta.url), "utf8");
+		assert.doesNotMatch(text, /"reset"|"--hard"|"push"|"update-ref"|"rebase"|"cherry-pick"|"merge"|"branch", "-[dDf]"/, file);
+	}
+});
+
+test("jump keeps the commits of a dive branch it replaces, though HEAD is elsewhere, on an orphan ref with the warning", async () => {
+	const f = fixture("jump-off-head-branch");
+	await jump({ ref: f.featId }, f.ctx);
+	const local = f.commit("mine.md", "local only\n");
+	// The checkout moves off its dive branch, and the work branch on origin moves on meanwhile.
+	git(f.checkout, "checkout", "-q", "--detach", "origin/main");
+	const parent = tempDir("jump-data-other");
+	git(parent, "clone", "-q", f.remote, "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "theirs.md"), "theirs\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "theirs");
+	git(clone, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+	f.err.length = 0;
+	await jump({}, f.ctx);
+	const kept = `refs/nosedive-orphans/${f.heroId}/${local}`;
+	assert.equal(git(f.checkout, "rev-parse", kept), local, "the replaced branch's tip is kept");
+	assert.match(f.err.join("\n"), new RegExp(`under ${kept}:`));
 });

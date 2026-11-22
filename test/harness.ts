@@ -118,19 +118,22 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		 * Plans a dive on the feat as `crud work:dive <gist> --meta:feat <feat> --section:Brief -` would, dive-shape scoping, naming
 		 * and linking it: committed on the hero's main and pushed. Returns its id.
 		 */
-		plan(gist = "Do the next part"): string {
+		plan(gist = "Do the next part", unpushed = false, at = hero): string {
 			const id = mintUuid();
 			const repoScope = options.readOnly ? `  - ${repoId}: {}\n` : `  - ${repoId}:\n      work-branch: work/ideas\n`;
 			const scopes = `scopes:\n  - 01a15bb1-da9e-7d2d-aa82-5ee97257adc6:\n      canonical: true\n${repoScope}`;
-			writeFileSync(join(hero, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ideas.${id.slice(-6)}\ngist: "${gist}"\n${scopes}meta:\n  feat: ${featId}\n---\n\n# ${gist}\n\n## Brief\n\n${gist}.\n`);
-			const featPath = join(hero, docs, `${featId}.md`);
+			writeFileSync(join(at, docs, `${id}.md`), `---\nkind: dive\nid: ${id}\nname: ideas.${id.slice(-6)}\ngist: "${gist}"\n${scopes}meta:\n  feat: ${featId}\n---\n\n# ${gist}\n\n## Brief\n\n${gist}.\n`);
+			const featPath = join(at, docs, `${featId}.md`);
 			const feat = readKbDoc(readFileSync(featPath, "utf8"));
 			const links = Array.isArray(feat.fm.links) ? feat.fm.links : [];
 			feat.yaml.set("links", [...links, { [`${docs}/${id}.md`]: { rel: "dives.feat" } }]);
 			writeKbDoc(featPath, feat.yaml, feat.body);
-			git(hero, "add", "-A");
-			git(hero, "commit", "-q", "-m", "plan a dive");
-			git(hero, "push", "-q", "origin", "HEAD:main");
+			git(at, "add", "-A");
+			// As crud commits it when unpushed: on this branch only, nosedive the committer.
+			const env = unpushed ? { ...process.env, GIT_COMMITTER_NAME: "nosedive", GIT_COMMITTER_EMAIL: "noreply@nosedive.dev" } : process.env;
+			const committed = spawnSync("git", ["commit", "-q", "-m", "plan a dive"], { cwd: at, env, encoding: "utf8" });
+			if (committed.status !== 0) throw new Error(`plan's commit failed: ${committed.stderr}`);
+			if (!unpushed) git(at, "push", "-q", "origin", "HEAD:main");
 			return id;
 		},
 	};
