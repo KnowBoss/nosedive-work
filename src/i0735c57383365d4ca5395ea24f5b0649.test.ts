@@ -602,3 +602,26 @@ test("a re-plan inside one land run never publishes a commit made while it ran",
 	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
 	assert.doesNotMatch(git(f.remote, "ls-tree", "-r", "--name-only", "refs/heads/work/ideas"), /late\.md/, "the commit made during the run was not published");
 });
+
+test("a rerun names the commits the failed run had not published even when the hero record never reached the home", async () => {
+	const f = fixture("land-rerun-names-no-record");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const guard = join(tempDir("land-names-guard"), "open").replace(/\\/g, "/");
+	const hook = join(heroRemote, "hooks", "pre-receive");
+	// The hero's home refuses its push until the guard file exists, so the scope is published and the record is not.
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = "refs/heads/main" ] && [ ! -e "${guard}" ]; then\n    echo "injected home refusal" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /injected home refusal/);
+	const late = f.commit("late.md", "made after the failure\n");
+	writeFileSync(join(f.hero, "late-hero.md"), "hero work after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
+	writeFileSync(guard, "");
+	f.out.length = 0;
+	await land({}, f.ctx);
+	const said = f.out.join("\n");
+	assert.match(said, /commits the failed land had not published/);
+	assert.match(said, new RegExp(`${late.slice(0, 7)} add late\\.md`));
+	assert.match(said, /[0-9a-f]{7} late hero work/);
+});
