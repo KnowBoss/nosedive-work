@@ -645,3 +645,27 @@ test("a commit made on a scope after the run took its tips is never planned or p
 	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
 });
+
+test("a hero commit made between reading the dive and taking the tips is refused, not published under the older read", async () => {
+	const f = fixture("land-hero-after-read");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	let done = false;
+	// The cape's version is read right after the dive is, before the run takes its tips: a commit lands in between.
+	const cape = { ...f.ctx.capes[0]! };
+	Object.defineProperty(cape, "version", {
+		get() {
+			if (!done) {
+				done = true;
+				writeFileSync(join(f.hero, "late-hero.md"), "made after the dive was read\n");
+				git(f.hero, "add", "-A");
+				git(f.hero, "commit", "-q", "-m", "late hero work");
+			}
+			return "test";
+		},
+	});
+	await assert.rejects(land({}, { ...f.ctx, capes: [cape, ...f.ctx.capes.slice(1)] }), /gained commits while this run was publishing/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
+	assert.equal(spawnSync("git", ["cat-file", "-e", "refs/heads/main:late-hero.md"], { cwd: heroRemote }).status === 0, false);
+});

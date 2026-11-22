@@ -9,6 +9,8 @@ import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f147154
 export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): Promise<void> {
 	const hero = findBridge(ctx.cwd);
 	if (!hero?.workspace) throw new Error("land works in a hero repo, and this is not one");
+	// The hero's tip before the dive is read: the doc, scopes and gates come from it, so the run must still be there when it plans.
+	const heroStart = runGit(hero.dir, "rev-parse", "HEAD").text;
 	const dive = diveOnDeck(hero, ctx, typeof args.dive === "string" ? args.dive : undefined);
 	const me = emailOf(hero);
 	const id = String(dive.doc.fm.id);
@@ -29,13 +31,15 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 	// work from, so a commit made after it is never published by this run, whatever it passes or skips.
 	const snapshot = new Map<string, string>();
 	for (const dir of [hero.dir, ...dive.scopes.filter((scope) => scope.ours).map((scope) => scope.dir)]) {
-		const head = runGit(dir, "rev-parse", "HEAD").text;
+		const head = dir === hero.dir ? heroStart : runGit(dir, "rev-parse", "HEAD").text;
 		snapshot.set(dir, head);
 		pinned.set(dir, new Set([head]));
 	}
 	const checkTips = () => {
 		for (const dir of snapshot.keys()) pin(dir, runGit(dir, "rev-parse", "HEAD").text, []);
 	};
+	// A commit between reading the dive and taking the tips is refused here, not published under the older read.
+	checkTips();
 	const lines = await replanning(() => {
 		checkTips();
 		// Every refusal is found before anything is pushed, and so is every conflict.
