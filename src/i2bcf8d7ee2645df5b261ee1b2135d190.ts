@@ -58,8 +58,9 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		// Written down before the record is pushed, so a retry can tell a record this land published from anyone else's.
 		const markerRef = `refs/nosedive-landed/${hero.id}/${id}`;
 		const marker = runGit(hero.dir, "rev-parse", "--verify", "-q", markerRef).text || undefined;
-		const already = marker !== undefined && homePlan.tip === marker;
-		assertHeld(hero, dive, homePlan.tip, marker);
+		// The record this land wrote down is on the published home, though others may have pushed on top of it.
+		const already = marker !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", marker, homePlan.upstream).ok;
+		assertHeld(hero, dive, homePlan.tip, already ? homePlan.tip : undefined);
 
 		const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(version)];
 		const notes: string[] = [];
@@ -116,7 +117,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
 		const cleared = new Map<string, string | undefined>([...dive.scopes.map((scope): [string, undefined] => [scope.repoId, undefined]), [hero.id!, undefined]]);
 		const doc = heroDoc(hero, id)!;
-		const made = already ? { tip: marker! } : recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
+		const made = already ? { tip: homePlan.tip } : recordOn(hero, heroTip, keyOf(hero, doc), { action: "land", label: "landed", summary: `${me} landed it`, meta: { diver: null, outcome: "landed" }, scopes: scopesWith(hero, doc, cleared), lines: [`${me} landed it.`, "", ...notes] }, version);
 		const heroSeen = diveRefs(hero.dir, id);
 		const recorded = heroRef(hero, dive.doc);
 		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok));
@@ -137,7 +138,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			},
 		});
 		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
-		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: made.tip, new: null }] } });
+		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: marker ?? made.tip, new: null }] } });
 		carry({ steps, after }, "land");
 		return notes;
 	});

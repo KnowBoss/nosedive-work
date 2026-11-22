@@ -511,3 +511,29 @@ test("a retry refuses a dive someone else landed, whatever marker this checkout 
 	git(clone, "push", "-q", "origin", "HEAD:main");
 	await assert.rejects(land({}, f.ctx), /is over: it landed/);
 });
+
+test("land finishes its cleanup when someone pushed a commit on top of its landed record, without rewinding the home", async () => {
+	const f = fixture("land-record-buried");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const parent = tempDir("land-buried");
+	git(parent, "clone", "-q", heroRemote, "clone");
+	const clone = join(parent, "clone");
+	writeFileSync(join(clone, "later.md"), "later\n");
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "later work");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	const tip = git(heroRemote, "rev-parse", "refs/heads/main");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over here");
+	assert.equal(git(f.hero, "rev-parse", "main"), tip, "the home is at the latest published tip, not rewound to the record");
+	assert.equal(git(heroRemote, "rev-parse", "refs/heads/main"), tip, "and nothing was pushed");
+});
