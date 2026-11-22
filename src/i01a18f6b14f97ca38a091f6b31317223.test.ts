@@ -82,7 +82,7 @@ test("pass --turn appends two turns in invocation order", async () => {
 	assert.match(text, /First\n\nFirst turn[\s\S]*Second\n\nSecond turn\n$/);
 });
 
-test("pass --turn refuses when an editor saves after the gate's fresh read, preserving that save", async () => {
+test("pass --turn commits its computed turn when an editor saves after the gate's fresh read, preserving that save", async () => {
 	const f = await setup("editor-race");
 	const path = join(f.hero, "kb", `${f.id}.md`);
 	const edited = `${readFileSync(path, "utf8").trimEnd()}\n\neditor save\n`;
@@ -92,11 +92,27 @@ test("pass --turn refuses when an editor saves after the gate's fresh read, pres
 		await real(call);
 		writeFileSync(path, edited);
 	}) as never;
-	const head = git(f.hero, "rev-parse", "HEAD");
-	assert.equal(await f.run(["stale turn"]), 1);
-	assert.match(f.err.join("\n"), /changed while pass was editing it/);
+	assert.equal(await f.run(["stale turn"]), 0);
+	assert.match(f.err.join("\n"), /warning:.*committed.*left.*file.*alone/i);
 	assert.equal(readFileSync(path, "utf8"), edited);
-	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
+	assert.match(git(f.hero, "show", `HEAD:kb/${f.id}.md`), /stale turn/);
+	assert.doesNotMatch(git(f.hero, "show", `HEAD:kb/${f.id}.md`), /editor save/);
+});
+
+test("pass --turn commits only its computed text while editor saves at both commit windows survive", async () => {
+	for (const stage of ["post-index-change", "reference-transaction"] as const) {
+		const f = await setup(`editor-${stage}`);
+		const path = join(f.hero, "kb", `${f.id}.md`);
+		const edited = `editor save at ${stage}\n`;
+		const guard = stage === "reference-transaction" ? '[ "$1" = committed ] || exit 0\n' : "";
+		writeFileSync(join(f.hero, ".git", "hooks", stage), `#!/bin/sh\n${guard}printf '${edited}' > '${path.replace(/\\/g, "/")}'\n`, { mode: 0o755 });
+
+		assert.equal(await f.run(["nosedive turn", "--label", "Race"]), 0, f.err.join("\n"));
+		assert.equal(readFileSync(path, "utf8"), edited);
+		assert.match(git(f.hero, "show", `HEAD:kb/${f.id}.md`), /nosedive turn/);
+		assert.doesNotMatch(git(f.hero, "show", `HEAD:kb/${f.id}.md`), /editor save at/);
+		assert.match(f.err.join("\n"), /warning:.*committed.*left.*file.*alone/i);
+	}
 });
 
 for (const { label, args } of [
