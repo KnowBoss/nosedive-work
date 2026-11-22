@@ -538,8 +538,8 @@ test("land finishes its cleanup when someone pushed a commit on top of its lande
 	assert.equal(git(heroRemote, "rev-parse", "refs/heads/main"), tip, "and nothing was pushed");
 });
 
-test("a land retry publishes nothing new: a scope commit made after the failure is kept on an orphan ref, the branch stays", async () => {
-	const f = fixture("land-retry-late-scope");
+test("a land rerun lands the dive as it is now, fast-forwarding what the failed run published, and names the commits that run had not", async () => {
+	const f = fixture("land-rerun-current");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	f.commit("idea.md", "an idea\n");
@@ -550,18 +550,26 @@ test("a land retry publishes nothing new: a scope commit made after the failure 
 	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
 	const published = f.remoteRef("refs/heads/work/ideas");
 	const late = f.commit("late.md", "made after the failure\n");
+	writeFileSync(join(f.hero, "late-hero.md"), "hero work after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
 	unlinkSync(hook);
-	f.err.length = 0;
+	f.out.length = 0;
 	await land({}, f.ctx);
-	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing new was pushed");
-	assert.equal(git(f.checkout, "rev-parse", `refs/nosedive-orphans/${f.heroId}/${late}`), late, "the late commit is kept");
-	assert.match(f.err.join("\n"), /warning:.*git switch -c/s);
-	assert.match(git(f.checkout, "branch", "--list", "nosedive-*"), /nosedive-/, "the branch is not deleted");
-	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the rest of the cleanup finished");
+	assert.equal(git(f.remote, "rev-list", "--count", `${published}..refs/heads/work/ideas`), "1", "the rerun fast-forwarded from what the failed run published");
+	assert.equal(git(f.remote, "merge-base", published, "refs/heads/work/ideas"), published);
+	assert.equal(git(f.remote, "show", "refs/heads/work/ideas:late.md"), "made after the failure");
+	assert.equal(git(heroRemote, "show", "refs/heads/main:late-hero.md"), "hero work after the failure");
+	const said = f.out.join("\n");
+	assert.match(said, /commits the failed land had not published/);
+	assert.match(said, new RegExp(`${late.slice(0, 7)} add late\\.md`));
+	assert.match(said, /[0-9a-f]{7} late hero work/);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over");
 });
 
-test("a land retry orphans nothing: a hero commit made after the failure keeps its branch and an orphan ref", async () => {
-	const f = fixture("land-retry-late-hero");
+test("a land rerun whose plan would rewrite what the failed run published refuses instead", async () => {
+	const f = fixture("land-rerun-rewrite");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
 	f.commit("idea.md", "an idea\n");
@@ -570,15 +578,27 @@ test("a land retry orphans nothing: a hero commit made after the failure keeps i
 	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
 	const hook = rejectDelete(heroRemote, legacy);
 	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
-	writeFileSync(join(f.hero, "late-hero.md"), "after the failure\n");
-	git(f.hero, "add", "-A");
-	git(f.hero, "commit", "-q", "-m", "late hero work");
-	const late = git(f.hero, "rev-parse", "HEAD");
+	const published = f.remoteRef("refs/heads/work/ideas");
+	git(f.checkout, "reset", "-q", "--hard", "HEAD~1");
+	f.commit("other.md", "a different history\n");
 	unlinkSync(hook);
-	f.err.length = 0;
-	await land({}, f.ctx);
-	assert.equal(git(f.hero, "rev-parse", `refs/nosedive-orphans/${f.heroId}/${late}`), late, "the late commit is kept");
-	assert.match(f.err.join("\n"), /warning:.*git switch -c/s);
-	assert.match(git(f.hero, "branch", "--list", "nosedive-*"), /nosedive-/, "the dive branch is not deleted");
-	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the rest of the cleanup finished");
+	await assert.rejects(land({}, f.ctx), /has moved to/);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing was rewritten");
+});
+
+test("a re-plan inside one land run never publishes a commit made while it ran", async () => {
+	const f = fixture("land-pinned");
+	await jump({ ref: f.featId }, f.ctx);
+	f.commit("idea.md", "an idea\n");
+	const parent = tempDir("land-pinned-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone").replace(/\\/g, "/");
+	const guard = join(parent, "ran").replace(/\\/g, "/");
+	const scope = f.checkout.replace(/\\/g, "/");
+	const hook = join(git(f.hero, "rev-parse", "--path-format=absolute", "--git-common-dir"), "hooks", "pre-push");
+	const person = `git -c user.name=O -c user.email=o@example.com`;
+	// While the hero's push is on its way: a commit lands on the scope's dive branch, and the home moves, so the run plans again.
+	writeFileSync(hook, `#!/bin/sh\ncase "$(cat)" in *" refs/heads/main "*) ;; *) exit 0;; esac\n[ -e "${guard}" ] && exit 0\n: > "${guard}"\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ncd "${scope}" && echo late > late.md && git add -A && ${person} commit -qm made-during-the-run\ncd "${clone}" && echo x > x.md && git add -A && ${person} commit -qm other && git push -q origin HEAD:main\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.ctx), /gained commits while this run was publishing/);
+	assert.doesNotMatch(git(f.remote, "ls-tree", "-r", "--name-only", "refs/heads/work/ideas"), /late\.md/, "the commit made during the run was not published");
 });
