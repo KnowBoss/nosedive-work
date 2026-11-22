@@ -82,6 +82,23 @@ test("pass --turn appends two turns in invocation order", async () => {
 	assert.match(text, /First\n\nFirst turn[\s\S]*Second\n\nSecond turn\n$/);
 });
 
+test("pass --turn refuses when an editor saves after the gate's fresh read, preserving that save", async () => {
+	const f = await setup("editor-race");
+	const path = join(f.hero, "kb", `${f.id}.md`);
+	const edited = `${readFileSync(path, "utf8").trimEnd()}\n\neditor save\n`;
+	const key = namespacedUuid(TURN, f.ctx.capes[1]!.id);
+	const real = f.ctx.capes[1]!.index[key] as typeof turn;
+	f.ctx.capes[1]!.index[key] = (async (call: Parameters<typeof turn>[0]) => {
+		await real(call);
+		writeFileSync(path, edited);
+	}) as never;
+	const head = git(f.hero, "rev-parse", "HEAD");
+	assert.equal(await f.run(["stale turn"]), 1);
+	assert.match(f.err.join("\n"), /changed while pass was editing it/);
+	assert.equal(readFileSync(path, "utf8"), edited);
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
+});
+
 for (const { label, args } of [
 	{ label: "no content", args: [] },
 	{ label: "label only", args: ["--label", "Review"] },

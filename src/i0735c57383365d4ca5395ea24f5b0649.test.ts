@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
+import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { fetchAll } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { unzipSync } from "fflate";
 import { fixture, git, tempDir } from "../test/harness.ts";
@@ -362,6 +363,47 @@ test("pack resumes after its dirty snapshot was published and a later deletion f
 	assert.equal(git(f.remote, "show", `${wip}:draft.md`), "unsaved work");
 });
 
+test("bail resumes after its dirty snapshot was published and a later deletion failed", async () => {
+	const f = fixture("bail-resume-dirty");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const oldTip = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, oldTip);
+	await jump({ ref: id }, f.ctx);
+	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(bail({ reason: "superseded" }, f.ctx), /injected deletion failure/);
+	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const wip = f.remoteRef(own);
+	assert.notEqual(wip, oldTip, "the dirty snapshot was published before the refused deletion");
+	unlinkSync(hook);
+	await bail({ reason: "superseded" }, f.ctx);
+	assert.equal(f.remoteRef(own), wip, "the retry recognised its published snapshot");
+	assert.equal(f.remoteRef(legacy), "");
+	assert.match(f.doc(id), /outcome: bailed/);
+});
+
+test("pack resumes a no-work all-deletions plan after an earlier deletion succeeded", async () => {
+	const f = fixture("pack-resume-deletions");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const committed = f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	git(f.checkout, "push", "-q", "origin", `${committed}:refs/heads/work/ideas`);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.remote, "update-ref", legacy, committed);
+	await jump({ ref: id }, f.ctx);
+	const hook = rejectDelete(f.remote, legacy);
+	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), "", "the own ref deletion was a safe completed prefix");
+	assert.equal(f.remoteRef(legacy), committed, "the refused deletion remains");
+	unlinkSync(hook);
+	await pack({}, f.ctx);
+	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), "");
+});
+
 test("pack refuses an own ref it did not publish, even when it is an ancestor of HEAD", async () => {
 	const f = fixture("pack-own-ancestor");
 	await jump({ ref: f.featId }, f.ctx);
@@ -387,6 +429,21 @@ test("land refuses to delete a dive ref holding newer work than the landed work 
 	await assert.rejects(land({}, f.ctx), /work this dive did not see and the landed work does not hold/);
 	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "nothing was pushed");
 	assert.equal(f.remoteRef(legacy), newer, "the newer work was not deleted");
+});
+
+test("land refuses to delete an unproven hero dive tip", async () => {
+	const f = fixture("land-newer-hero-ref");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const newer = strayCommit(heroRemote);
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(heroRemote, "update-ref", legacy, newer);
+	const heads = git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas");
+	await assert.rejects(land({}, f.ctx), /work this dive did not see and the landed work does not hold/);
+	assert.equal(git(f.checkout, "ls-remote", "origin", "refs/heads/work/ideas"), heads, "nothing was pushed");
+	assert.equal(git(heroRemote, "rev-parse", legacy), newer, "the unproven hero work was not deleted");
 });
 
 test("a retry refuses a dive another invocation has landed meanwhile", async () => {

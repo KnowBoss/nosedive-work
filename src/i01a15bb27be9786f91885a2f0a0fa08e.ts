@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import type { Cape } from "nosedive-core";
@@ -370,6 +370,36 @@ function read(dir: string, files: string[]): Record<string, Uint8Array> {
 	return Object.fromEntries(files.map((file) => [file, new Uint8Array(readFileSync(join(dir, file)))]));
 }
 
+/** Atomically stages a rebuildable path; only the staged bytes are deleted, while mismatches are restored exclusively. */
+export function removeRebuildable(path: string, staged: string, digest: string, afterRename?: () => void): boolean {
+	mkdirSync(dirname(staged), { recursive: true });
+	renameSync(path, staged);
+	afterRename?.();
+	if (createHash("sha256").update(readFileSync(staged)).digest("hex") === digest) {
+		unlinkSync(staged);
+		return true;
+	}
+	try {
+		copyFileSync(staged, path, constants.COPYFILE_EXCL);
+		unlinkSync(staged);
+		return false;
+	} catch (error) {
+		throw new Error(`changed rebuildable bytes were kept in ${staged} because they could not be restored without overwriting ${path}: ${(error as Error).message}`);
+	}
+}
+
+/** Moves each orphan candidate before reading it, so later cleanup can touch only the staged paths. */
+export function stageOrphans(dir: string, files: string[], staging: string, afterRename?: () => void): Record<string, Uint8Array> {
+	for (const file of files) {
+		const to = join(staging, file);
+		mkdirSync(dirname(to), { recursive: true });
+		renameSync(join(dir, file), to);
+	}
+	afterRename?.();
+	for (const file of files) if (!lstatSync(join(staging, file)).isFile()) throw new Error(`${file} changed type while it was being saved; it was kept in ${staging}`);
+	return read(staging, files);
+}
+
 /** Zips a scope's keepable ignored files to its feat's pack, replacing it, or deleting it when there are none; returns how many. */
 export function packIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }): number {
 	const path = join(packsDir(hero), featId, `${scope.name}.zip`);
@@ -433,21 +463,19 @@ function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; 
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(path, zipSync(read(staging, moved)));
 		}
-		rmSync(staging, { recursive: true, force: true });
 		const dirs = new Set(moved.flatMap((file) => {
 			const parts = file.split("/");
 			return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 		}));
 		// A rebuildable file goes only if it is still the file that was seen; a link goes as a link, its target never touched.
 		for (const [file, digest] of seen.rebuildable) {
-			try {
-				const path = join(scope.dir, file);
-				if (lstatSync(path).isFile() && createHash("sha256").update(readFileSync(path)).digest("hex") === digest) {
-					unlinkSync(path);
-					const parts = file.split("/");
-					for (let i = parts.length - 1; i > 0; i--) dirs.add(parts.slice(0, i).join("/"));
-				}
-			} catch {}
+			const live = join(scope.dir, file);
+			let isFile = false;
+			try { isFile = lstatSync(live).isFile(); } catch {}
+			if (isFile && removeRebuildable(live, join(staging, ".rebuildable", file), digest)) {
+				const parts = file.split("/");
+				for (let i = parts.length - 1; i > 0; i--) dirs.add(parts.slice(0, i).join("/"));
+			}
 		}
 		for (const link of seen.links) {
 			const path = join(scope.dir, link);
@@ -460,6 +488,7 @@ function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; 
 		for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
 			try { rmdirSync(join(scope.dir, dir)); } catch {}
 		}
+		rmSync(staging, { recursive: true, force: true });
 	} catch (error) {
 		throw new Error(`ignored files were kept in ${staging} because their pack could not be completed: ${(error as Error).message}`);
 	}
@@ -474,37 +503,48 @@ function stageAndPackIgnored(hero: Hero, featId: string, scope: { name: string; 
 export function swapIgnored(hero: Hero, featId: string, scope: { name: string; dir: string }): string | undefined {
 	const files = keepable(hero, scope.dir);
 	let orphaned: string | undefined;
-	// A file that changed after it was read for the orphan pack keeps its newer bytes, and is not overwritten from the feat's pack.
-	const kept = new Set<string>();
 	if (files.length > 0) {
-		const current = read(scope.dir, files);
-		const newest = newestPack(hero, scope.name);
-		if (!newest || !same(current, unzipSync(new Uint8Array(readFileSync(newest))))) {
-			orphaned = join(packsDir(hero), "orphans", `${scope.name}-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`);
-			mkdirSync(dirname(orphaned), { recursive: true });
-			writeFileSync(orphaned, zipSync(current));
-		}
-		for (const file of files) {
-			const path = join(scope.dir, file);
-			let now: Buffer | undefined;
-			try {
-				now = readFileSync(path);
-			} catch {}
-			if (now && Buffer.compare(now, current[file]!) !== 0) kept.add(file);
-			else rmSync(path, { force: true });
+		const staging = mkdtempSync(join(scope.dir, ".nosedive-orphan-"));
+		try {
+			const current = stageOrphans(scope.dir, files, staging);
+			const newest = newestPack(hero, scope.name);
+			if (!newest || !same(current, unzipSync(new Uint8Array(readFileSync(newest))))) orphaned = writeOrphanPack(hero, scope.name, current);
+			rmSync(staging, { recursive: true });
+		} catch (error) {
+			throw new Error(`ignored files were kept in ${staging} because their orphan pack could not be completed: ${(error as Error).message}`);
 		}
 	}
 	const pack = join(packsDir(hero), featId, `${scope.name}.zip`);
 	if (existsSync(pack)) {
 		// A path the destination tracks is the tree's, never a pack entry's to overwrite.
 		const tracked = new Set(runGit(scope.dir, "ls-files").text.split("\n").filter(Boolean));
+		const blocked: Record<string, Uint8Array> = {};
 		for (const [file, bytes] of Object.entries(unzipSync(new Uint8Array(readFileSync(pack))))) {
-			if (tracked.has(file) || kept.has(file)) continue;
-			mkdirSync(dirname(join(scope.dir, file)), { recursive: true });
-			writeFileSync(join(scope.dir, file), bytes);
+			if (tracked.has(file)) continue;
+			const path = join(scope.dir, file);
+			try {
+				lstatSync(path);
+				blocked[file] = bytes;
+				continue;
+			} catch {}
+			mkdirSync(dirname(path), { recursive: true });
+			try {
+				writeFileSync(path, bytes, { flag: "wx" });
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") blocked[file] = bytes;
+				else throw error;
+			}
 		}
+		if (Object.keys(blocked).length > 0) orphaned = writeOrphanPack(hero, `${scope.name}-blocked`, blocked);
 	}
 	return orphaned;
+}
+
+function writeOrphanPack(hero: Hero, name: string, files: Record<string, Uint8Array>): string {
+	const path = join(packsDir(hero), "orphans", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.zip`);
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, zipSync(files), { flag: "wx" });
+	return path;
 }
 
 /** The most recently written pack of a repo, across feats. */

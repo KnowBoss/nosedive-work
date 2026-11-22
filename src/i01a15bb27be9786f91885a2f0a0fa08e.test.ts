@@ -90,10 +90,11 @@ test("a dive's work in progress is told by its name, in the subject pack writes 
 	assert.equal(isWip(dive, "add idea.md"), false);
 });
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { zipSync } from "fflate";
-import { swapIgnored } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { unzipSync, zipSync } from "fflate";
+import { removeRebuildable, stageOrphans, swapIgnored } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 test("restoring a pack never overwrites a file the destination tracks", async () => {
 	const f = fixture("swap-tracked");
@@ -105,4 +106,59 @@ test("restoring a pack never overwrites a file the destination tracks", async ()
 	swapIgnored(hero, f.featId, { name: "data", dir: f.checkout });
 	assert.equal(readFileSync(join(f.checkout, "README.md"), "utf8"), "data\n", "the tracked file is the tree's");
 	assert.equal(readFileSync(join(f.checkout, "keep.local"), "utf8"), "restored\n", "an ignored entry comes back");
+});
+
+test("restoring a pack keeps an existing untracked file aside from the pack entry", async () => {
+	const f = fixture("swap-untracked");
+	await jump({ ref: f.featId }, f.ctx);
+	const hero = findBridge(f.hero)!;
+	const pack = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");
+	mkdirSync(dirname(pack), { recursive: true });
+	writeFileSync(pack, zipSync({ "keep.local": new TextEncoder().encode("from the pack\n") }));
+	writeFileSync(join(f.checkout, ".gitignore"), "keep.local\n");
+	writeFileSync(join(f.checkout, "keep.local"), "untracked work\n");
+	writeFileSync(join(f.checkout, ".gitignore"), "", "utf8"); // The destination tree dropped the source branch's ignore rule.
+	const orphaned = swapIgnored(hero, f.featId, { name: "data", dir: f.checkout });
+	assert.equal(readFileSync(join(f.checkout, "keep.local"), "utf8"), "untracked work\n");
+	assert.ok(orphaned, "the blocked pack entry is archived and reported");
+	assert.equal(new TextDecoder().decode(unzipSync(new Uint8Array(readFileSync(orphaned)))["keep.local"]), "from the pack\n");
+});
+
+test("restoring a pack never follows a symlink and keeps the blocked entry aside", async () => {
+	const f = fixture("swap-symlink");
+	await jump({ ref: f.featId }, f.ctx);
+	const hero = findBridge(f.hero)!;
+	const pack = join(f.hero, ".nosedive", "local", "packs", f.featId, "data.zip");
+	mkdirSync(dirname(pack), { recursive: true });
+	writeFileSync(pack, zipSync({ "keep.local": new TextEncoder().encode("from the pack\n") }));
+	const target = join(f.hero, "outside");
+	mkdirSync(target);
+	writeFileSync(join(target, "work.txt"), "outside work\n");
+	symlinkSync(target, join(f.checkout, "keep.local"), "junction");
+	const orphaned = swapIgnored(hero, f.featId, { name: "data", dir: f.checkout });
+	assert.equal(readFileSync(join(target, "work.txt"), "utf8"), "outside work\n");
+	assert.ok(orphaned, "the blocked pack entry is archived and reported");
+});
+
+test("rebuildable cleanup deletes only the staged bytes and preserves a replacement at the live path", () => {
+	const f = fixture("rebuildable-stage");
+	mkdirSync(f.checkout, { recursive: true });
+	const path = join(f.checkout, "generated.js");
+	const staged = join(mkdtempSync(join(f.checkout, ".stage-")), "generated.js");
+	writeFileSync(path, "generated before\n");
+	const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+	assert.equal(removeRebuildable(path, staged, digest, () => writeFileSync(path, "new work\n")), true);
+	assert.equal(readFileSync(path, "utf8"), "new work\n");
+});
+
+test("orphan cleanup archives the staged bytes and preserves a replacement at the live path", () => {
+	const f = fixture("orphan-stage");
+	mkdirSync(f.checkout, { recursive: true });
+	const path = join(f.checkout, "ignored.local");
+	const staging = mkdtempSync(join(f.checkout, ".stage-"));
+	writeFileSync(path, "ignored before\n");
+	const staged = stageOrphans(f.checkout, ["ignored.local"], staging, () => writeFileSync(path, "new work\n"));
+	assert.equal(new TextDecoder().decode(staged["ignored.local"]), "ignored before\n");
+	rmSync(staging, { recursive: true });
+	assert.equal(readFileSync(path, "utf8"), "new work\n");
 });
