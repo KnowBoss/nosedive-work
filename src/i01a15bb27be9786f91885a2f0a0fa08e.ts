@@ -220,7 +220,9 @@ export function homeUpdate(plan: HomePlan, tip: Sha, also: Iterable<Sha> = []): 
  * Refuses, on the home as just fetched and planned, a dive that is over or not held by this checkout: a retry works from a
  * fresh fetch, and another invocation may have landed, bailed or taken the dive since this one began.
  */
-export function assertHeld(hero: Hero, dive: Dive, tip: Sha): void {
+export function assertHeld(hero: Hero, dive: Dive, tip: Sha, landed?: Sha): void {
+	// The home's tip is the land record this checkout wrote down before it pushed it: the dive is over by its own hand, and only its cleanup is left.
+	if (landed && tip === landed) return;
 	const doc = docAt(hero.dir, tip, keyOf(hero, dive.doc));
 	const name = String(dive.doc.fm.name);
 	if (!doc) throw new Error(`dive ${name} is not on ${dive.home} as just fetched, so nothing was changed`);

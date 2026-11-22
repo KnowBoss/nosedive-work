@@ -477,3 +477,37 @@ test("an ignored path that became a directory during publication is left in plac
 	assert.equal(readFileSync(join(f.checkout, "secrets.local", "new.txt"), "utf8"), "new work\n", "the new work is intact");
 	assert.equal(readFileSync(join(f.checkout, "node_modules", "dep.js"), "utf8"), "changed meanwhile\n", "a rebuildable file that is no longer the one seen is never deleted");
 });
+
+test("land finishes the cleanup of a landed record it published, when a hero ref deletion failed", async () => {
+	const f = fixture("land-hero-cleanup");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	assert.match(git(heroRemote, "log", "-1", "--format=%s", "refs/heads/main"), /^land\(/, "the landed record was published");
+	assert.equal(f.onDeck(), id, "the dive is still on deck here");
+	unlinkSync(hook);
+	await land({}, f.ctx);
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the remaining cleanup finished");
+	assert.throws(() => f.onDeck(), "the dive is over here too");
+	assert.equal(git(heroRemote, "rev-list", "--count", "refs/heads/main", "--grep=^land("), "1", "no second record");
+});
+
+test("a retry refuses a dive someone else landed, whatever marker this checkout holds", async () => {
+	const f = fixture("land-someone-else");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	const parent = tempDir("land-other");
+	git(parent, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), "clone");
+	const clone = join(parent, "clone");
+	const doc = join(clone, "kb", `${id}.md`);
+	writeFileSync(doc, readFileSync(doc, "utf8").replace("\nmeta:\n", "\nmeta:\n  outcome: landed\n"));
+	git(clone, "add", "-A");
+	git(clone, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "landed elsewhere");
+	git(clone, "push", "-q", "origin", "HEAD:main");
+	await assert.rejects(land({}, f.ctx), /is over: it landed/);
+});
