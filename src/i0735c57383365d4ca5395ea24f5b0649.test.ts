@@ -537,3 +537,48 @@ test("land finishes its cleanup when someone pushed a commit on top of its lande
 	assert.equal(git(f.hero, "rev-parse", "main"), tip, "the home is at the latest published tip, not rewound to the record");
 	assert.equal(git(heroRemote, "rev-parse", "refs/heads/main"), tip, "and nothing was pushed");
 });
+
+test("a land retry publishes nothing new: a scope commit made after the failure is kept on an orphan ref, the branch stays", async () => {
+	const f = fixture("land-retry-late-scope");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	const published = f.remoteRef("refs/heads/work/ideas");
+	const late = f.commit("late.md", "made after the failure\n");
+	unlinkSync(hook);
+	f.err.length = 0;
+	await land({}, f.ctx);
+	assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "nothing new was pushed");
+	assert.equal(git(f.checkout, "rev-parse", `refs/nosedive-orphans/${f.heroId}/${late}`), late, "the late commit is kept");
+	assert.match(f.err.join("\n"), /warning:.*git switch -c/s);
+	assert.match(git(f.checkout, "branch", "--list", "nosedive-*"), /nosedive-/, "the branch is not deleted");
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the rest of the cleanup finished");
+});
+
+test("a land retry orphans nothing: a hero commit made after the failure keeps its branch and an orphan ref", async () => {
+	const f = fixture("land-retry-late-hero");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
+	git(f.hero, "push", "-q", "origin", `HEAD:${legacy}`);
+	const hook = rejectDelete(heroRemote, legacy);
+	await assert.rejects(land({}, f.ctx), /injected deletion failure/);
+	writeFileSync(join(f.hero, "late-hero.md"), "after the failure\n");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-q", "-m", "late hero work");
+	const late = git(f.hero, "rev-parse", "HEAD");
+	unlinkSync(hook);
+	f.err.length = 0;
+	await land({}, f.ctx);
+	assert.equal(git(f.hero, "rev-parse", `refs/nosedive-orphans/${f.heroId}/${late}`), late, "the late commit is kept");
+	assert.match(f.err.join("\n"), /warning:.*git switch -c/s);
+	assert.match(git(f.hero, "branch", "--list", "nosedive-*"), /nosedive-/, "the dive branch is not deleted");
+	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the rest of the cleanup finished");
+});
