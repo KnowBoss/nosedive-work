@@ -3,7 +3,7 @@ import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor, fetchExact, replay, stampRange } from "nosedive-core";
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
-import { refuseOwnScopes } from "./dive-origin.ts";
+import { refuseOwnScopes } from "./i01a204ebdb4a799ba8119e92b0e93cc5.ts";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordOn, replanning, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 

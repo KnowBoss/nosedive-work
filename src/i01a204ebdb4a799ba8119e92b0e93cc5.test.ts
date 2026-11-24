@@ -7,7 +7,7 @@ import * as core from "nosedive-core";
 import type { Cape } from "nosedive-core";
 import { i01a1335480147d0686528aee80f8ee34 as namespacedUuid, i01a1335487e477549d84a6fc2c901bf6 as describeCape, i01a1336a958f71c7beec4db3195c7966 as launch } from "nosedive-core";
 import { fixture, git } from "../test/harness.ts";
-import { isOwnOrigin, normalizedOrigin } from "./dive-origin.ts";
+import { isOwnOrigin, normalizedOrigin } from "./i01a204ebdb4a799ba8119e92b0e93cc5.ts";
 import { i01a1b45b04a079a494fed25a3665456d as diveShape } from "./i01a1b45b04a079a494fed25a3665456d.ts";
 import { i01a18f4542c670ccb111f6bd564e1f50 as turnGate } from "./i01a18f4542c670ccb111f6bd564e1f50.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";

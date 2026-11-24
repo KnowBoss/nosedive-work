@@ -1,6 +1,6 @@
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { refuseOwnScopes } from "./dive-origin.ts";
+import { refuseOwnScopes } from "./i01a204ebdb4a799ba8119e92b0e93cc5.ts";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, emailOf, putDown, readOnlyRefusals, scopesWith } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 export async function i0735c57383365d4ca5395ea24f5b0649(args: Args, ctx: Ctx): Promise<void> {

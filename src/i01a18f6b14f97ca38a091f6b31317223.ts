@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { GateCtx } from "nosedive-core";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
-import { refuseOwnScopes } from "./dive-origin.ts";
+import { refuseOwnScopes } from "./i01a204ebdb4a799ba8119e92b0e93cc5.ts";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, putTurnOnHome, type TurnOutcome } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 export async function i01a18f6b14f97ca38a091f6b31317223(ctx: GateCtx): Promise<void> {

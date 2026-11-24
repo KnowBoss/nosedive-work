@@ -1,7 +1,7 @@
 import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { docAt } from "nosedive-core";
-import { ownScopes } from "./dive-origin.ts";
+import { ownScopes } from "./i01a204ebdb4a799ba8119e92b0e93cc5.ts";
 import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, carry, emailOf, fetchHome, heroBranch, homeUpdate, homeUpstream, keyOf, openDives, planHome, putDown, recordOn, replanning, scopesWith, type Dive } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 export async function iffc777778a63553ba90babcc038eb748(args: Args, ctx: Ctx): Promise<void> {
