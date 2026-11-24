@@ -1,7 +1,7 @@
 // pack [<dive>]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
@@ -793,4 +793,71 @@ test("a land rerun replays the turns written after the failed run, and the home'
 	assert.equal(f.doc(t.id), doc + "\n");
 	assert.equal(git(heroRemote, "for-each-ref", legacy), "", "the cleanup finished");
 	assert.throws(() => f.onDeck(), "the dive is over");
+});
+
+test("pack then jump on another checkout carries the turns, with no section doubled by the hero work around them", async () => {
+	const f = fixture("pack-turns-jump");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const heroWork = (name: string) => {
+		writeFileSync(join(f.hero, `${name}.txt`), name);
+		git(f.hero, "add", "-A");
+		git(f.hero, "commit", "-qm", `hero ${name}`);
+	};
+	heroWork("a");
+	await t.turn("One.", "First");
+	heroWork("b");
+	await t.turn("Two.", "Second");
+	await pack({}, t.plain);
+
+	// A clone, not a worktree: it shares no refs, so jump finds the dive through what it fetches.
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	await jump({ ref: t.id }, { ...f.ctx, cwd: other });
+
+	const doc = readFileSync(join(other, "kb", `${t.id}.md`), "utf8");
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "Second"), 1);
+	assert.equal(sections(doc, "packed"), 1);
+	assert.equal(git(other, "log", "--format=%s", "refs/heads/main..HEAD"), "hero b\nhero a", "the hero's work is replayed, the turns are not");
+
+	appendFileSync(join(other, ".git", "info", "exclude"), "workspace/\n");
+	await land({}, { ...f.ctx, cwd: other });
+	const landed = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(landed, "First"), 1);
+	assert.equal(sections(landed, "Second"), 1);
+	assert.equal(sections(landed, "landed"), 1);
+});
+
+test("a dive in flight with turns also on the home, packed and jumped on another checkout, is not doubled", async () => {
+	const f = fixture("pack-turns-on-main-jump");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	writeFileSync(join(f.hero, "a.txt"), "a");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "hero a");
+	const first = await t.turn("One.", "First");
+	// As a turn put it on the home before turns waited for put-down: a copy of the commit, pushed.
+	onOrigin(f, (clone) => {
+		git(clone, "fetch", "-q", f.hero, branch);
+		git(clone, "cherry-pick", first);
+	});
+	await t.turn("Two.", "Second");
+	await pack({}, t.plain);
+
+	const other = join(f.hero, "..", "other-clone-main");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	await jump({ ref: t.id }, { ...f.ctx, cwd: other });
+
+	const doc = readFileSync(join(other, "kb", `${t.id}.md`), "utf8");
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "Second"), 1);
+	assert.equal(git(other, "log", "--format=%s", "refs/heads/main..HEAD"), "hero a", "only the hero's work is replayed");
 });

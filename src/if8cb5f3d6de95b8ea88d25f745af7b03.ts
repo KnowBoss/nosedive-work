@@ -13,7 +13,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
-import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, trunkOf, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -277,7 +277,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		if (mode === "record") {
 			const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId)]));
 			refs.set(hero.id!, heroPacked);
-			const replayed = heroPacked ? runGit(hero.dir, "rev-list", "--count", heroPacked, "--not", `refs/heads/${home}`).text : "0";
+			const replayed = heroPacked ? String(Number(runGit(hero.dir, "rev-list", "--count", heroPacked, "--not", `refs/heads/${home}`).text) - turnCommits(hero, target, `refs/heads/${home}`, heroPacked).length) : "0";
 			if (replayed !== "0") lines.push(`- hero: ${replayed} commit${replayed === "1" ? "" : "s"} replayed`);
 			let rel: string;
 			let minted: { doc: KbDoc; extra: Record<string, string> } | undefined;
@@ -302,9 +302,9 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		// The dive branch, cut from the home's tip after the jump record, its packed hero work replayed on it (dive-branches).
 		let dTip = base;
 		if (heroPacked && !isAncestor(hero.dir, heroPacked, base)) {
-			const since = runGit(hero.dir, "merge-base", heroPacked, base).text;
-			// A turn the pack carried is on the home already, as its own commit there: `cherry` marks it `-`, and it is left out.
-			const fresh = runGit(hero.dir, "cherry", base, heroPacked, since).text.split("\n").filter((line) => line.startsWith("+ ")).map((line) => line.slice(2));
+			// A turn is nosedive's own commit changing only the dive doc, and the home's record holds its section: it is left out, whether or not the home also has a copy of it.
+			const turns = new Set(turnCommits(hero, target, base, heroPacked));
+			const fresh = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", "--no-merges", heroPacked, "--not", base).text.split("\n").filter((sha) => sha && !turns.has(sha));
 			if (fresh.length > 0) {
 				const replayed = replay(hero.dir, fresh, base);
 				if ("conflict" in replayed) throw new Error(`the dive's packed hero work conflicts with ${home}, so nothing was recorded: it stays on ${heroPacked.slice(0, 7)}, to cherry-pick by hand\n${replayed.conflict}`);
