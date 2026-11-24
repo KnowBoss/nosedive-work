@@ -218,7 +218,7 @@ test("a core that gives gates no committed hook still says the turn is on the di
 	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1);
 });
 
-test("two turns then a land leave each section once on the home, and no empty commit", async () => {
+test("two turns then a land: the one record it pushes holds each section once, counts the turns, and no turn is its own commit on the home", async () => {
 	const f = await setup("land");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const base = git(f.hero, "rev-parse", "main");
@@ -229,10 +229,12 @@ test("two turns then a land leave each section once on the home, and no empty co
 	const doc = f.doc(f.id);
 	assert.equal(heading(doc, "First"), 1);
 	assert.equal(heading(doc, "Second"), 1);
+	assert.ok(doc.indexOf("One.") < doc.indexOf("Two.") && doc.indexOf("Two.") < doc.indexOf("landed it."));
+	assert.match(doc, /\n- turns: 2\n$/);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
 	const commits = git(f.hero, "rev-list", `${base}..main`).split("\n");
-	assert.equal(commits.length, 3, "the two turns and the land record");
-	for (const commit of commits) assert.notEqual(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", commit), "", `${commit} changes something`);
+	assert.equal(commits.length, 1, "the land record alone");
+	assert.notEqual(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", commits[0]!), "", "and it changes the dive doc");
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), git(f.hero, "rev-parse", "main"));
 	assert.equal(git(f.hero, "branch", "--list", "nosedive-*"), "");
 });
