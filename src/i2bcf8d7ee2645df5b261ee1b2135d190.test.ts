@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5395ea24f5b0649.ts";
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
-import { fixture, git, onOrigin, turner } from "../test/harness.ts";
+import { fixture, git, moveHomeWhenScopePushed, onOrigin, turner } from "../test/harness.ts";
 
 const nosedive = "Co-Authored-By: nosedive test <noreply@nosedive.dev>";
 
@@ -163,4 +163,54 @@ test("refuses uncommitted changes, and a branch that moved past the work", async
 	git(other, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
 	await assert.rejects(land({}, f.ctx), new RegExp(`work/ideas in data has moved to \\w{7}, which this dive's work does not contain: pack, then jump ${f.onDeck()}`));
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), git(other, "rev-parse", "HEAD"));
+});
+test("a home whose copy of the dive doc moves after the work branch is pushed is reported as partly landed, naming what was published and what was not, overwriting nothing; the rerun refuses the same way until the change is reverted, then finishes without doubling the work", async () => {
+    const f = fixture("land-window");
+    await jump({ ref: f.featId }, f.ctx);
+    const t = await turner(f);
+    const origin = git(f.hero, "remote", "get-url", "origin");
+    await t.turn("One.", "First");
+    f.commit("idea.md", "an idea\n");
+    moveHomeWhenScopePushed(f, (clone) => {
+        const path = join(clone, "kb", `${t.id}.md`);
+        writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+        git(clone, "commit", "-qam", "note on the dive");
+    });
+    const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+    const message = () => {
+        const short = git(f.hero, "rev-parse", "--short", git(origin, "rev-parse", "refs/heads/main"));
+        return `kb/${t.id}.md on main changed since this dive began, by ${short} note on the dive, and part of the work is published already, so land is only partly done. Published: data work/ideas at ${f.remoteRef("refs/heads/work/ideas").slice(0, 7)}. Not published: the hero's work and the land record on main. Every turn is still on ${branch} and that change on main is untouched. Running \`nosedive land\` again refuses the same way until that change is reverted on main: revert it, or ask whoever made it to, then run \`nosedive land\` again to finish it`;
+    };
+
+    await assert.rejects(land({}, t.plain), (error: Error) => {
+        assert.equal(error.message, message());
+        return true;
+    });
+
+    const moved = git(origin, "rev-parse", "refs/heads/main");
+    const published = f.remoteRef("refs/heads/work/ideas");
+    assert.equal(git(origin, "log", "-1", "--format=%s", moved), "note on the dive", "the other edit is the home's tip, not overwritten");
+    assert.equal(sections(git(origin, "show", `${moved}:kb/${t.id}.md`), "landed"), 0, "no record was pushed");
+    assert.notEqual(published, "", "the work branch is published");
+    assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
+    assert.equal(sections(git(f.hero, "show", `${branch}:kb/${t.id}.md`), "First"), 1, "the turn is on the dive branch");
+
+    await assert.rejects(land({}, t.plain), (error: Error) => {
+        assert.equal(error.message, message());
+        return true;
+    });
+    assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "the rerun pushed nothing over the other edit");
+    assert.equal(f.remoteRef("refs/heads/work/ideas"), published);
+
+    onOrigin(f, (clone) => git(clone, "revert", "--no-edit", "HEAD"));
+    await land({}, t.plain);
+
+    const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+    assert.equal(sections(doc, "First"), 1);
+    assert.equal(sections(doc, "landed"), 1);
+    assert.doesNotMatch(doc, /A note from elsewhere\./, "the change was reverted, as the message asked");
+    assert.equal(f.remoteRef("refs/heads/work/ideas"), published, "the work was not stamped twice");
+    assert.equal(git(f.remote, "rev-list", "--count", "refs/heads/main..refs/heads/work/ideas"), "1");
+    assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+    assert.throws(() => f.onDeck(), "nothing is held");
 });

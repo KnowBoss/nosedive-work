@@ -3,7 +3,7 @@ import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "nosedive-core";
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, assertHomeUnmoved, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): Promise<void> {
@@ -88,7 +88,16 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const already = marker !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", marker, homePlan.upstream).ok;
 		assertHeld(hero, dive, homePlan.tip, already ? homePlan.tip : undefined);
 		// The record goes on the dive branch's copy of the dive doc, which holds every turn; a rerun's record is on the home already.
-		const onBranch = already ? undefined : recordBase(hero, dive, homePlan.tip, heroStart, "land");
+		// The scope work a failed run published, as the work branch shows it: its stamped tip, written down before the push, is the branch's.
+		const earlier = () => {
+			const published = writable.flatMap((scope) => {
+				const tip = runGit(scope.dir, "rev-parse", "--verify", "-q", `refs/nosedive-landed-scope/${hero.id}/${id}/${scope.repoId}`).text;
+				const source = runGit(scope.dir, "rev-parse", "--verify", "-q", `refs/nosedive-source/${hero.id}/${id}/${scope.repoId}`).text;
+				return tip !== "" && tip !== source && found.get(scope.repoId) === tip ? [`${scope.name} ${scope.branch} at ${tip.slice(0, 7)}`] : [];
+			});
+			return published.length > 0 ? { published, unpublished: [`the hero's work and the land record on ${home}`], rerun: "land" } : undefined;
+		};
+		const onBranch = already ? undefined : recordBase(hero, dive, homePlan.tip, heroStart, "land", earlier);
 
 		const trailers = [`Nosedive-Dive: ${id}`, `Nosedive-Feat: ${durableFeat(hero, dive.doc, ctx.capes)}`, coAuthor(version)];
 		const notes: string[] = [];
@@ -206,6 +215,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
 		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: already ? marker! : made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || d0, new: null }] : [])] } });
 		if (later.length > 0) notes.push("- commits the failed land had not published, landed now:", ...later);
+		assertHomeUnmoved(hero, up, homePlan.upstream);
 		carry({ steps, after }, "land");
 		return notes;
 	});

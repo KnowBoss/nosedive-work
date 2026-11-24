@@ -13,6 +13,6 @@ export async function iffc777778a63553ba90babcc038eb748(args: Args, ctx: Ctx): P
     await putDown(dive, ctx.capes[0]!.version, "bail", ({ puts, refs, own, turns }) => {
         const lines = [`${me} bailed: ${reason}`, "", ...puts.map((put) => `- ${put.name}: ${put.sha ? `held ${[...put.commits].reverse().join("; ")}, kept on ${own}` : "held no commits"}`), ...(turns > 0 ? [`- turns: ${turns}`] : [])];
 		return { action: "bail", label: "bailed", summary: reason, meta: { diver: null, outcome: "bailed" }, scopes: scopesWith(hero, dive.doc, refs), lines };
-	});
+	}, `bail --reason ${JSON.stringify(reason)}`);
 	ctx.out(`bailed ${String(dive.doc.fm.name)}`);
 }

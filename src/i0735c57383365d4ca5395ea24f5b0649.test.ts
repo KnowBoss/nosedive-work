@@ -10,7 +10,7 @@ import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b2
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { fetchAll } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { unzipSync } from "fflate";
-import { fixture, git, onOrigin, tempDir, turner } from "../test/harness.ts";
+import { fixture, git, moveHomeWhenScopePushed, onOrigin, tempDir, turner } from "../test/harness.ts";
 
 function rejectDelete(remote: string, ref: string): string {
 	const hook = join(remote, "hooks", "pre-receive");
@@ -860,4 +860,57 @@ test("a dive in flight with turns also on the home, packed and jumped on another
 	assert.equal(sections(doc, "First"), 1);
 	assert.equal(sections(doc, "Second"), 1);
 	assert.equal(git(other, "log", "--format=%s", "refs/heads/main..HEAD"), "hero a", "only the hero's work is replayed");
+});
+
+test("a home whose copy of the dive doc moves after the earlier pushes is reported as partly done, naming what was published and what was not, overwriting nothing; the rerun refuses the same way until the change is reverted, then finishes", async () => {
+	const f = fixture("pack-window");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	await t.turn("One.", "First");
+	const committed = f.commit("idea.md", "an idea\n");
+	const ref = `refs/nosedive/${f.heroId}/dives/${t.id}`;
+	moveHomeWhenScopePushed(f, (clone) => {
+		const path = join(clone, "kb", `${t.id}.md`);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+		git(clone, "commit", "-qam", "note on the dive");
+	});
+	const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	const head = git(f.hero, "rev-parse", "HEAD");
+	const message = () => {
+		const short = git(f.hero, "rev-parse", "--short", git(origin, "rev-parse", "refs/heads/main"));
+		return `kb/${t.id}.md on main changed since this dive began, by ${short} note on the dive, and part of the work is published already, so pack is only partly done. Published: data ${ref} at ${committed.slice(0, 7)}; hero ${ref} at ${git(origin, "rev-parse", ref).slice(0, 7)}. Not published: the record on main. Every turn is still on ${branch} and that change on main is untouched. Running \`nosedive pack\` again refuses the same way until that change is reverted on main: revert it, or ask whoever made it to, then run \`nosedive pack\` again to finish it`;
+	};
+
+	await assert.rejects(pack({}, t.plain), (error: Error) => {
+		assert.equal(error.message, message());
+		return true;
+	});
+
+	const moved = git(origin, "rev-parse", "refs/heads/main");
+	assert.equal(git(origin, "log", "-1", "--format=%s", moved), "note on the dive", "the other edit is the home's tip, not overwritten");
+	assert.match(git(origin, "show", `${moved}:kb/${t.id}.md`), /A note from elsewhere\./);
+	assert.equal(sections(git(origin, "show", `${moved}:kb/${t.id}.md`), "packed"), 0, "no record was pushed");
+	assert.equal(f.remoteRef(ref), committed, "the scope's work is published");
+	assert.notEqual(git(origin, "rev-parse", ref), "", "so is the hero's");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
+	assert.equal(sections(git(f.hero, "show", `${branch}:kb/${t.id}.md`), "First"), 1, "the turn is on the dive branch");
+
+	await assert.rejects(pack({}, t.plain), (error: Error) => {
+		assert.equal(error.message, message());
+		return true;
+	});
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "the rerun pushed nothing over the other edit");
+
+	onOrigin(f, (clone) => git(clone, "revert", "--no-edit", "HEAD"));
+	await pack({}, t.plain);
+
+	const doc = git(origin, "show", "refs/heads/main:kb/" + t.id + ".md");
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "packed"), 1);
+	assert.doesNotMatch(doc, /A note from elsewhere\./, "the change was reverted, as the message asked");
+	assert.equal(f.remoteRef(ref), committed);
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+	assert.throws(() => f.onDeck(), "nothing is held");
 });

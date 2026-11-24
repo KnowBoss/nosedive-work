@@ -143,6 +143,11 @@ export function carry(plan: Plan, command: string): void {
 	throw done.refusal.kind === "stale" && !/is checked out in/.test(done.refusal.detail) ? new Stale(message) : new Error(message);
 }
 
+/** Refuses, as stale, a home that moved since it was planned, judged on a fresh fetch taken just before the first push: nothing is pushed yet, so the command plans again. */
+export function assertHomeUnmoved(hero: Hero, up: Upstream, planned: Sha): void {
+	if (fetchHome(hero, up) !== planned) throw new Stale(`${up.remote}/${up.name} moved while this was being planned, so nothing was changed`);
+}
+
 /** Plans and carries out again from a fresh fetch while the commit finds the world moved, at most three times. */
 export async function replanning<T>(attempt: () => Promise<T> | T): Promise<T> {
 	for (let tries = 0; ; tries++) {
@@ -767,6 +772,9 @@ export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[]
 		.map((commit) => commit.sha);
 }
 
+/** What a put-down already published when the home moved under it, what is still to publish, and the command that finishes it once the home allows. */
+export type Earlier = { published: string[]; unpublished: string[]; rerun: string };
+
 /**
  * The dive doc a put-down's record is built on: the dive branch's copy, which holds every turn, with the turns it holds. The
  * record is one commit on `homeTip`, and the push of it is fast-forward and leased on that tip, so the push is what guards
@@ -774,7 +782,7 @@ export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[]
  * its copy at the dive's base: it is fine unchanged, or when the dive's copy begins with it (this dive's own turns already on
  * the home, as a dive in flight before turns waited for put-down has), and otherwise refused, before anything is changed.
  */
-export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string): { doc: KbDoc; turns: number } {
+export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, command: string, earlier?: () => Earlier | undefined): { doc: KbDoc; turns: number } {
 	const rel = keyOf(hero, dive.doc);
 	const mine = docAt(hero.dir, diveTip, rel);
 	const theirs = docAt(hero.dir, homeTip, rel);
@@ -782,6 +790,9 @@ export function recordBase(hero: Hero, dive: Dive, homeTip: Sha, diveTip: Sha, c
 	const base = runGit(hero.dir, "merge-base", diveTip, `refs/heads/${dive.home}`).text || diveTip;
 	if (theirs.text !== docAt(hero.dir, base, rel)?.text && !mine.text.startsWith(theirs.text)) {
 		const moved = runGit(hero.dir, "log", "-1", "--format=%h %s", `${base}..${homeTip}`, "--", rel).text || homeTip.slice(0, 7);
+		// Some of the work is published already, by a run that was stopped when the home moved, so "nothing" would be false.
+		const partial = earlier?.();
+		if (partial) throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, and part of the work is published already, so ${command} is only partly done. Published: ${partial.published.join("; ")}. Not published: ${partial.unpublished.join("; ")}. Every turn is still on ${dive.branch} and that change on ${dive.home} is untouched. Running \`nosedive ${partial.rerun}\` again refuses the same way until that change is reverted on ${dive.home}: revert it, or ask whoever made it to, then run \`nosedive ${partial.rerun}\` again to finish it`);
 		throw new Error(`${rel} on ${dive.home} changed since this dive began, by ${moved}, so nothing was ${command === "land" ? "landed" : "put down"} and every turn is still on ${dive.branch}: revert that change on ${dive.home}, or ask whoever made it to, then run \`nosedive ${command}\` again`);
 	}
 	return { doc: mine, turns: turnCommits(hero, dive.doc, base, diveTip).length };
@@ -796,11 +807,11 @@ export type PutDown = { puts: Put[]; refs: Map<string, string | undefined>; own:
  * deleted refs next and the record last, with local refs after them. The checkouts are left detached at their base and the hero on its
  * home, the dive branches gone, only once every push is done.
  */
-export function putDown(dive: Dive, version: string, command: string, record: (done: PutDown) => Change): Promise<PutDown> {
-	return replanning(() => putDownOnce(dive, version, command, record));
+export function putDown(dive: Dive, version: string, command: string, record: (done: PutDown) => Change, rerun = command): Promise<PutDown> {
+	return replanning(() => putDownOnce(dive, version, command, record, rerun));
 }
 
-function putDownOnce(dive: Dive, version: string, command: string, record: (done: PutDown) => Change): PutDown {
+function putDownOnce(dive: Dive, version: string, command: string, record: (done: PutDown) => Change, rerun: string): PutDown {
 	const { hero, home } = dive;
 	const id = String(dive.doc.fm.id);
 	const own = diveRef(hero, id);
@@ -846,7 +857,18 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	if (moved.length > 0) throw new Error(`the dive's refs moved under it, so nothing was put down:\n  ${moved.join("\n  ")}`);
 
 	// The record goes on the dive branch's copy of the dive doc, which holds every turn; refused before anything is pushed or moved.
-	const recorded = recordBase(hero, dive, homePlan.tip, puts.find((put) => put.key === hero.id)!.tip!, command);
+	// What an earlier run of this command published, as the remote shows it: a dive ref at the sha this checkout wrote down before pushing it.
+	const earlier = (): Earlier | undefined => {
+		const has = (put: Put) => put.sha !== undefined && observed.get(put.key)!.some(({ ref, sha }) => ref === own && sha === put.sha) && runGit(put.dir, "rev-parse", "--verify", "-q", pushedRef(put.dir, put.sha)).ok;
+		const held = puts.filter((put) => put.sha !== undefined);
+		if (!held.some(has)) return undefined;
+		return {
+			published: held.filter(has).map((put) => `${put.name} ${own} at ${put.sha!.slice(0, 7)}`),
+			unpublished: [...held.filter((put) => !has(put)).map((put) => `${put.name} ${own}`), `the record on ${home}`],
+			rerun,
+		};
+	};
+	const recorded = recordBase(hero, dive, homePlan.tip, puts.find((put) => put.key === hero.id)!.tip!, command, earlier);
 	const done: PutDown = { puts, refs: new Map(puts.map((put) => [put.key, put.sha])), own, turns: recorded.turns };
 	const made = recordOn(hero, homePlan.tip, keyOf(hero, dive.doc), record(done), version, { base: recorded.doc });
 	const ignored = new Map(writable.map((scope) => [scope.repoId, seeIgnored(hero, scope.dir)]));
@@ -880,6 +902,7 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 			after.push({ repo: put.name, dir: put.dir, local: { head: { from: { branch: dive.branch }, to: { detached: base } }, files: { from: put.tip!, to: base }, drop } });
 		}
 	}
+	assertHomeUnmoved(hero, up, homePlan.upstream);
 	carry({ steps, after }, command);
 	for (const scope of writable) {
 		const found = ignored.get(scope.repoId)!;
