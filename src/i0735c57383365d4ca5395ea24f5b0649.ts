@@ -11,8 +11,8 @@ export async function i0735c57383365d4ca5395ea24f5b0649(args: Args, ctx: Ctx): P
 	if (refused.length > 0) throw new Error(`read-only scopes hold work with nowhere to go, so nothing was packed:\n  ${refused.join("\n  ")}`);
 
 	let lines: string[] = [];
-	await putDown(dive, ctx.capes[0]!.version, "pack", ({ puts, refs, own }) => {
-		lines = puts.map((put) => (put.sha ? `- ${put.name}: ${put.commits.length} commit${put.commits.length === 1 ? "" : "s"} kept on ${own} at ${put.sha.slice(0, 7)}` : `- ${put.name}: no work`));
+    await putDown(dive, ctx.capes[0]!.version, "pack", ({ puts, refs, own, turns }) => {
+        lines = [...puts.map((put) => (put.sha ? `- ${put.name}: ${put.commits.length} commit${put.commits.length === 1 ? "" : "s"} kept on ${own} at ${put.sha.slice(0, 7)}` : `- ${put.name}: no work`)), ...(turns > 0 ? [`- turns: ${turns}`] : [])];
 		return { action: "pack", label: "packed", summary: `${me} put it down`, meta: { diver: null, packer: me }, scopes: scopesWith(hero, dive.doc, refs), lines: [`${me} put it down.`, "", ...lines] };
 	});
 	ctx.out(`packed ${String(dive.doc.fm.name)}${lines.length > 0 ? `\n${lines.join("\n")}` : ""}`);

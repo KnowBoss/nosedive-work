@@ -10,7 +10,7 @@ import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b2
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { fetchAll } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { unzipSync } from "fflate";
-import { fixture, git, tempDir } from "../test/harness.ts";
+import { fixture, git, onOrigin, tempDir, turner } from "../test/harness.ts";
 
 function rejectDelete(remote: string, ref: string): string {
 	const hook = join(remote, "hooks", "pre-receive");
@@ -668,4 +668,94 @@ test("a hero commit made between reading the dive and taking the tips is refused
 	await assert.rejects(land({}, { ...f.ctx, capes: [cape, ...f.ctx.capes.slice(1)] }), /gained commits while this run was publishing/);
 	assert.equal(f.remoteRef("refs/heads/work/ideas"), "", "nothing was published");
 	assert.equal(spawnSync("git", ["cat-file", "-e", "refs/heads/main:late-hero.md"], { cwd: heroRemote }).status === 0, false);
+});
+
+// Turns reach the home only in the record pack pushes (turns-publish-when)
+
+const sections = (text: string, label: string) => (text.match(new RegExp(`^## \\S+ ${label}$`, "gm")) ?? []).length;
+
+test("the record it pushes holds every turn on the dive branch, once, and counts them", async () => {
+	const f = fixture("pack-turns");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const base = git(origin, "rev-parse", "refs/heads/main");
+	await t.turn("One.", "First");
+	await t.turn("Two.", "Second");
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "the turns are not on the home before the pack");
+
+	await pack({}, t.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "Second"), 1);
+	assert.equal(sections(doc, "packed"), 1);
+	assert.ok(doc.indexOf("One.") < doc.indexOf("Two.") && doc.indexOf("Two.") < doc.indexOf("put it down."));
+	assert.match(doc, /\n- hero: 2 commits kept on refs\/nosedive\/[^\n]+\n- turns: 2$/);
+	assert.equal(git(origin, "rev-list", "--count", `${base}..refs/heads/main`), "1", "one record commit holds the turns");
+	assert.match(git(origin, "log", "-1", "--format=%s", "refs/heads/main"), /^pack\(.+\): diver@example\.com put it down$/);
+	assert.equal(f.doc(t.id), doc + "\n", "the hero's copy is the home's");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+	assert.equal(git(f.hero, "rev-parse", "main"), git(origin, "rev-parse", "refs/heads/main"));
+});
+
+test("a dive in flight with turns already on the home is not doubled, and still packs every turn", async () => {
+	const f = fixture("pack-turns-on-main");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	const base = git(origin, "rev-parse", "refs/heads/main");
+	const first = await t.turn("One.", "First");
+	const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	// As a turn put it on the home before turns waited for put-down: a copy of the commit, pushed.
+	onOrigin(f, (clone) => {
+		git(clone, "fetch", "-q", f.hero, branch);
+		git(clone, "cherry-pick", first);
+	});
+	await t.turn("Two.", "Second");
+
+	await pack({}, t.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(doc, "First"), 1, "the turn the home had is not repeated");
+	assert.equal(sections(doc, "Second"), 1);
+	assert.match(doc, /\n- turns: 2$/);
+	assert.equal(git(origin, "rev-list", "--count", `${base}..refs/heads/main`), "2", "the turn's copy and the record");
+});
+
+test("refuses, changing nothing, when the home's copy of the dive doc changed since the dive began", async () => {
+	const f = fixture("pack-moved");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	await t.turn("One.", "First");
+	onOrigin(f, (clone) => {
+		const path = join(clone, "kb", `${t.id}.md`);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+		git(clone, "commit", "-qam", "note on the dive");
+	});
+	const moved = git(origin, "rev-parse", "refs/heads/main");
+	const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+	const head = git(f.hero, "rev-parse", "HEAD");
+	const main = git(f.hero, "rev-parse", "main");
+	const doc = f.doc(t.id);
+	const status = git(f.hero, "status", "--porcelain");
+	const checkout = git(f.checkout, "rev-parse", "HEAD");
+
+	await assert.rejects(pack({}, t.plain), (error: Error) => {
+		const short = git(f.hero, "rev-parse", "--short", moved);
+		assert.equal(error.message, `kb/${t.id}.md on main changed since this dive began, by ${short} note on the dive, so nothing was put down and every turn is still on ${branch}: revert that change on main, or ask whoever made it to, then run \`nosedive pack\` again`);
+		return true;
+	});
+
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "nothing was pushed");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
+	assert.equal(git(f.hero, "rev-parse", "main"), main);
+	assert.equal(f.doc(t.id), doc);
+	assert.equal(git(f.hero, "status", "--porcelain"), status);
+	assert.equal(git(f.checkout, "rev-parse", "HEAD"), checkout);
+	assert.equal(sections(git(f.hero, "show", `${branch}:kb/${t.id}.md`), "First"), 1, "the turn is on the dive branch");
 });

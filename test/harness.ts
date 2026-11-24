@@ -138,3 +138,44 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		},
 	};
 }
+
+/** The ids of `pass --turn`'s gate and the dive's shape, in work. */
+const TURN = "01a18f45-42c6-70cc-b111-f6bd564e1f50";
+const DIVE_SHAPE = "01a1b45b-04a0-79a4-94fe-d25a3665456d";
+
+/** Runs the real turn gate through the launcher on a jumped fixture; `plain` is the ctx for the loop's own actions (pack, land, bail). */
+export async function turner(f: ReturnType<typeof fixture>) {
+    const core = await import("nosedive-core");
+    const { i01a18f4542c670ccb111f6bd564e1f50: turn } = await import("../src/i01a18f4542c670ccb111f6bd564e1f50.ts");
+    const { i01a1b45b04a079a494fed25a3665456d: diveShape } = await import("../src/i01a1b45b04a079a494fed25a3665456d.ts");
+    const { dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const source = core.i01a1335487e477549d84a6fc2c901bf6(dirname(dirname(fileURLToPath(import.meta.url))));
+    const plain = { ...f.ctx };
+    const work = f.ctx.capes[1]!;
+    const dive = work.kinds.dive as Record<string, unknown>;
+    const declared = source.kinds.dive as Record<string, unknown>;
+    const ns = core.i01a1335480147d0686528aee80f8ee34;
+    const cape = { ...work, docs: source.docs, index: { [ns(TURN, work.id)]: turn, [ns(DIVE_SHAPE, work.id)]: diveShape }, kinds: { ...work.kinds, dive: { ...dive, links: declared.links } } };
+    const turning: Ctx = { ...f.ctx, capes: [core as never, cape as never] };
+    const id = f.onDeck();
+    return {
+        plain,
+        id,
+        /** One turn on the dive branch, under its own heading label; returns the commit. */
+        async turn(summary: string, label: string): Promise<string> {
+            const code = await core.i01a1336a958f71c7beec4db3195c7966(["pass", "--turn", id, summary, "--label", label], turning);
+            if (code !== 0) throw new Error(`pass --turn failed: ${f.err.join("\n")}`);
+            return git(f.hero, "rev-parse", "HEAD");
+        },
+    };
+}
+
+/** Pushes to the hero's origin main as another checkout would: `edit` works in a scratch clone of it, which is pushed after. */
+export function onOrigin(f: ReturnType<typeof fixture>, edit: (clone: string) => void): void {
+    const clone = join(tempDir("origin-clone"), "clone");
+    git(f.hero, "clone", "-q", git(f.hero, "remote", "get-url", "origin"), clone);
+    identify(clone);
+    edit(clone);
+    git(clone, "push", "-q", "origin", "HEAD:main");
+}

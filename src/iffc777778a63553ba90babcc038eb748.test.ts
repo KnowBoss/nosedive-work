@@ -1,11 +1,11 @@
 // bail [<dive>] --reason <why>
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { if8cb5f3d6de95b8ea88d25f745af7b03 as jump } from "./if8cb5f3d6de95b8ea88d25f745af7b03.ts";
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
-import { fixture, git } from "../test/harness.ts";
+import { fixture, git, onOrigin, turner } from "../test/harness.ts";
 
 test("keeps what the dive held on its ref, uncommitted work included, records why, leaves the checkout at its base, and ends it", async () => {
 	const f = fixture("bail");
@@ -52,4 +52,60 @@ test("bails without atomic-push support at the origin", async () => {
 test("bail's usage binds --reason as reason, the key bail reads (bail-reason-binding)", async () => {
 	const { i01a1335482437c9eb145885f65f12aa1: matchUsage } = await import("nosedive-core");
 	assert.equal(matchUsage(["bail [<dive>] --reason <why>"], ["bail", "--reason", "gone stale"]).args.reason, "gone stale");
+});
+
+// Turns reach the home only in the record bail pushes (turns-publish-when)
+
+const sections = (text: string, label: string) => (text.match(new RegExp(`^## \\S+ ${label}$`, "gm")) ?? []).length;
+
+test("the record it pushes holds every turn on the dive branch, once, and counts them", async () => {
+    const f = fixture("bail-turns");
+    await jump({ ref: f.featId }, f.ctx);
+    const t = await turner(f);
+    const origin = git(f.hero, "remote", "get-url", "origin");
+    const base = git(origin, "rev-parse", "refs/heads/main");
+    await t.turn("One.", "First");
+    await t.turn("Two.", "Second");
+    assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "the turns are not on the home before the bail");
+
+    await bail({ reason: "a better idea came along" }, t.plain);
+
+    const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+    assert.equal(sections(doc, "First"), 1);
+    assert.equal(sections(doc, "Second"), 1);
+    assert.equal(sections(doc, "bailed"), 1);
+    assert.ok(doc.indexOf("One.") < doc.indexOf("Two.") && doc.indexOf("Two.") < doc.indexOf("bailed: a better idea"));
+    assert.match(doc, /\n- hero: held [^\n]+\n- turns: 2$/);
+    assert.equal(git(origin, "rev-list", "--count", `${base}..refs/heads/main`), "1", "one record commit holds the turns");
+    assert.equal(git(origin, "log", "-1", "--format=%s", "refs/heads/main"), `bail(${t.id.slice(-6)}.ideas): a better idea came along`);
+    assert.throws(() => f.onDeck());
+});
+
+test("refuses, changing nothing and throwing no turn away, when the home's copy of the dive doc changed since the dive began", async () => {
+    const f = fixture("bail-moved");
+    await jump({ ref: f.featId }, f.ctx);
+    const t = await turner(f);
+    const origin = git(f.hero, "remote", "get-url", "origin");
+    await t.turn("One.", "First");
+    onOrigin(f, (clone) => {
+        const path = join(clone, "kb", `${t.id}.md`);
+        writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+        git(clone, "commit", "-qam", "note on the dive");
+    });
+    const moved = git(origin, "rev-parse", "refs/heads/main");
+    const branch = git(f.hero, "symbolic-ref", "--short", "HEAD");
+    const head = git(f.hero, "rev-parse", "HEAD");
+
+    await assert.rejects(bail({ reason: "stuck" }, t.plain), (error: Error) => {
+        const short = git(f.hero, "rev-parse", "--short", moved);
+        assert.equal(error.message, `kb/${t.id}.md on main changed since this dive began, by ${short} note on the dive, so nothing was put down and every turn is still on ${branch}: revert that change on main, or ask whoever made it to, then run \`nosedive bail\` again`);
+        return true;
+    });
+
+    assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved);
+    assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+    assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
+    assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
+    assert.equal(sections(f.doc(t.id), "First"), 1, "the turn is on the dive branch");
+    assert.equal(sections(f.doc(t.id), "bailed"), 0);
 });
