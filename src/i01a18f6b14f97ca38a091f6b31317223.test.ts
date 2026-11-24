@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -160,23 +160,12 @@ test("pass --turn refuses a dive held by another worktree", async () => {
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
 });
 
-// A turn reaches the dive's home (turns-on-jumped-branch)
 
-/** Commits `file` with `text` on the origin's main from a second clone, as another checkout's push would. */
-function pushElsewhere(f: Awaited<ReturnType<typeof setup>>, file: string, text: string): string {
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	const other = join(f.hero, "..", `other-${file}`);
-	git(f.hero, "clone", "-q", origin, other);
-	writeFileSync(join(other, file), text);
-	git(other, "add", "-A");
-	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "-m", `add ${file}`);
-	git(other, "push", "-q", "origin", "HEAD:main");
-	return git(other, "rev-parse", "HEAD");
-}
+// A turn stays on the dive branch until land, pack or bail publishes it (turns-publish-when)
 
 const heading = (text: string, label: string) => (text.match(new RegExp(`^## \\S+ ${label}$`, "gm")) ?? []).length;
 
-test("a turn is committed on the home and pushed, and on the dive branch, and leaves the hero's work in progress alone", async () => {
+test("a turn is committed on the dive branch only, pushes nothing, says so, and leaves the hero's work in progress alone", async () => {
 	const f = await setup("home");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const root = join(f.hero, "kb", `${f.heroId}.md`);
@@ -186,111 +175,36 @@ test("a turn is committed on the home and pushed, and on the dive branch, and le
 	const base = git(f.hero, "rev-parse", "main");
 
 	assert.equal(await f.run(["Implemented the gate.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.out.join("\n"), /turn: [0-9a-f]{7} on main, pushed to origin\/main/);
-	assert.equal(f.err.join(""), "");
 	const turn = git(f.hero, "rev-parse", "HEAD");
+	assert.deepEqual(f.out.slice(-1), [`turn: ${turn.slice(0, 7)} committed on the dive branch only, not pushed; land, pack or bail publishes it`]);
+	assert.equal(f.err.join(""), "");
 	assert.match(git(f.hero, "symbolic-ref", "--short", "HEAD"), /^nosedive-/, "the hero stays on the dive branch");
-	assert.equal(git(f.hero, "rev-list", "--count", `${base}..main`), "1", "one commit on the home");
-	assert.equal(git(origin, "rev-parse", "refs/heads/main"), git(f.hero, "rev-parse", "main"), "pushed");
-	assert.equal(git(f.hero, "rev-parse", "refs/remotes/origin/main"), git(f.hero, "rev-parse", "main"));
-	assert.equal(git(f.hero, "show", `main:kb/${f.id}.md`), git(f.hero, "show", `${turn}:kb/${f.id}.md`), "the dive's doc alike on both");
-	assert.equal(heading(git(f.hero, "show", `main:kb/${f.id}.md`), "First"), 1);
-	assert.equal(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", "main"), `kb/${f.id}.md`, "only the turn's change goes home");
-	const show = (rev: string) => git(f.hero, "log", "-1", "--format=%B|%an %ae %aI %cn %ce %cI", rev);
-	assert.equal(show("main"), show(turn), "its message, author and dates");
+	assert.equal(git(f.hero, "rev-list", "--count", `${base}..${turn}`), "1", "one commit on the dive branch");
+	assert.equal(git(f.hero, "rev-parse", "main"), base, "the home did not move");
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "nothing was pushed");
+	assert.equal(git(f.hero, "rev-parse", "refs/remotes/origin/main"), base);
+	assert.equal(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", turn), `kb/${f.id}.md`, "only the dive doc changed");
+	assert.equal(heading(git(f.hero, "show", `${turn}:kb/${f.id}.md`), "First"), 1);
+	assert.equal(heading(git(f.hero, "show", `main:kb/${f.id}.md`), "First"), 0, "the home's copy has no turn");
 	assert.equal(git(f.hero, "status", "--porcelain"), status, "the working tree's other changes are as they were");
 	assert.match(readFileSync(root, "utf8"), /edited, not staged\n$/);
-	assert.equal(git(f.hero, "rev-list", "--count", `${base}..${turn}`), "1", "the dive branch holds it too");
 });
 
-test("a turn while the upstream has moved goes on top of it", async () => {
-	const f = await setup("moved");
-	const theirs = pushElsewhere(f, "elsewhere.md", "someone else's work\n");
-	assert.equal(await f.run(["Mine.", "--label", "Mine"]), 0, f.err.join("\n"));
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	assert.equal(f.err.join(""), "");
-	assert.equal(git(origin, "rev-parse", "refs/heads/main^"), theirs, "on top of the other push");
-	assert.equal(git(f.hero, "rev-parse", "main"), git(origin, "rev-parse", "refs/heads/main"), "the home followed");
-	assert.equal(git(f.hero, "show", "main:elsewhere.md"), "someone else's work");
-	assert.equal(heading(git(f.hero, "show", `main:kb/${f.id}.md`), "Mine"), 1);
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "0");
-	assert.match(f.out.join("\n"), /pushed to origin\/main/);
-});
-
-test("a turn while the upstream has moved takes the turns an offline one kept on top of it too", async () => {
-	const f = await setup("moved-kept");
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	git(f.hero, "remote", "set-url", "origin", join(f.hero, "..", "missing.git"));
-	assert.equal(await f.run(["Offline.", "--label", "Offline"]), 0, f.err.join("\n"));
-	git(f.hero, "remote", "set-url", "origin", origin);
-	const theirs = pushElsewhere(f, "elsewhere.md", "someone else's work\n");
-	assert.equal(await f.run(["Online.", "--label", "Online"]), 0, f.err.join("\n"));
-	assert.equal(git(origin, "rev-list", "--count", `${theirs}..refs/heads/main`), "2", "both turns on top of theirs");
-	assert.equal(git(f.hero, "rev-parse", "main"), git(origin, "rev-parse", "refs/heads/main"));
-	const doc = git(f.hero, "show", `main:kb/${f.id}.md`);
-	assert.equal(heading(doc, "Offline") + heading(doc, "Online"), 2);
-});
-
-test("a turn with the upstream unreachable is kept on both branches, warned, and pushed by the next turn", async () => {
-	const f = await setup("offline");
+test("a turn does not reach for its upstream, so one that is unreachable or refuses pushes says nothing", async () => {
+	const f = await setup("no-push");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const base = git(f.hero, "rev-parse", "main");
-	git(f.hero, "remote", "set-url", "origin", join(f.hero, "..", "missing.git"));
-	assert.equal(await f.run(["Offline.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.err.join("\n"), /warning: the turn is on main but not pushed to origin\/main: .+; the next turn, pack or land pushes it/);
-	assert.equal(git(f.hero, "rev-list", "--count", `${base}..main`), "1", "kept on the home");
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "1", "ahead of its upstream");
-	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1, "and on the dive branch");
-
-	git(f.hero, "remote", "set-url", "origin", origin);
-	f.err.length = 0;
-	assert.equal(await f.run(["Online.", "--label", "Second"]), 0, f.err.join("\n"));
-	assert.equal(f.err.join(""), "");
-	assert.equal(git(origin, "rev-list", "--count", `${base}..refs/heads/main`), "2", "both pushed");
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "0");
-	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
-	assert.equal(heading(doc, "First") + heading(doc, "Second"), 2);
-});
-
-test("a turn the upstream refuses, as a protected trunk does, is kept and warned, and pack pushes it", async () => {
-	const f = await setup("refused");
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	const base = git(f.hero, "rev-parse", "main");
-	const hook = join(origin, "hooks", "pre-receive");
-	writeFileSync(hook, "#!/bin/sh\necho protected >&2\nexit 1\n", { mode: 0o755 });
+	writeFileSync(join(origin, "hooks", "pre-receive"), "#!/bin/sh\necho protected >&2\nexit 1\n", { mode: 0o755 });
 	assert.equal(await f.run(["Refused.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.err.join("\n"), /warning: the turn is on main but not pushed to origin\/main: .*protected.*; the next turn, pack or land pushes it/);
-	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "nothing reached the upstream");
-	assert.equal(git(f.hero, "rev-list", "--count", `${base}..main`), "1");
-
-	unlinkSync(hook);
-	await pack({}, f.plain);
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "0", "pack pushed the home");
-	assert.equal(heading(git(origin, "show", `refs/heads/main:kb/${f.id}.md`), "First"), 1);
+	git(f.hero, "remote", "set-url", "origin", join(f.hero, "..", "missing.git"));
+	assert.equal(await f.run(["Offline.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.err.join(""), "", "nothing to warn of");
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base);
+	assert.equal(git(f.hero, "rev-parse", "main"), base);
+	assert.equal(git(f.hero, "rev-list", "--count", `${base}..HEAD`), "2");
 });
 
-test("a turn whose merge conflicts with the home leaves the home as it was, stays on the dive branch, and says so", async () => {
-	const f = await setup("conflict");
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	// The home's copy of the dive doc is changed by hand at its end, where a turn appends.
-	const tree = join(f.hero, "..", "home-tree");
-	git(f.hero, "worktree", "add", "-q", tree, "main");
-	const path = join(tree, "kb", `${f.id}.md`);
-	writeFileSync(path, `${readFileSync(path, "utf8").trimEnd()} Changed by hand.\n`);
-	// By nosedive's hand, so it is the conflict that refuses the turn, not whose commit it is.
-	git(tree, "-c", "user.name=nosedive", "-c", "user.email=noreply@nosedive.dev", "commit", "-qam", "by hand");
-	git(f.hero, "worktree", "remove", "--force", tree);
-	const home = git(f.hero, "rev-parse", "main");
-
-	assert.equal(await f.run(["Conflicting.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.err.join("\n"), /warning: the turn is on the dive branch only: it conflicts with main: .+; land carries it/);
-	assert.equal(git(f.hero, "rev-parse", "main"), home, "the home is as it was");
-	assert.equal(git(origin, "rev-parse", "refs/heads/main"), git(f.hero, "rev-parse", "refs/remotes/origin/main"), "nothing pushed");
-	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1, "the dive branch holds it");
-	assert.equal(git(f.hero, "status", "--porcelain"), "");
-});
-
-test("a core that gives gates no committed hook leaves the turn on the dive branch and says so", async () => {
+test("a core that gives gates no committed hook still says the turn is on the dive branch only", async () => {
 	const f = await setup("old-core");
 	const cape = f.ctx.capes[1]!;
 	const key = namespacedUuid(TURN, cape.id);
@@ -298,7 +212,8 @@ test("a core that gives gates no committed hook leaves the turn on the dive bran
 	cape.index[key] = ((call: Parameters<typeof turn>[0]) => real({ ...call, gate: { ...call.gate!, committed: undefined } })) as never;
 	const base = git(f.hero, "rev-parse", "main");
 	assert.equal(await f.run(["Old.", "--label", "First"]), 0, f.err.join("\n"));
-	assert.match(f.err.join("\n"), /warning: this nosedive cannot put the turn on main, so it is on the dive branch only: update nosedive core/);
+	assert.match(f.out.join("\n"), /turn: committed on the dive branch only, not pushed; land, pack or bail publishes it/);
+	assert.equal(f.err.join(""), "");
 	assert.equal(git(f.hero, "rev-parse", "main"), base);
 	assert.equal(heading(git(f.hero, "show", `HEAD:kb/${f.id}.md`), "First"), 1);
 });
@@ -309,8 +224,7 @@ test("two turns then a land leave each section once on the home, and no empty co
 	const base = git(f.hero, "rev-parse", "main");
 	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
 	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
-	const pushed = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
-	assert.equal(heading(pushed, "First") + heading(pushed, "Second"), 2, "both on the home before the land");
+	assert.equal(git(origin, "rev-parse", "refs/heads/main"), base, "neither turn is on the home before the land");
 	await land({}, f.plain);
 	const doc = f.doc(f.id);
 	assert.equal(heading(doc, "First"), 1);
@@ -321,33 +235,6 @@ test("two turns then a land leave each section once on the home, and no empty co
 	for (const commit of commits) assert.notEqual(git(f.hero, "diff-tree", "--no-commit-id", "--name-only", "-r", commit), "", `${commit} changes something`);
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), git(f.hero, "rev-parse", "main"));
 	assert.equal(git(f.hero, "branch", "--list", "nosedive-*"), "");
-});
-
-test("land pushes a turn that could not be, with its record", async () => {
-	const f = await setup("land-kept");
-	const origin = git(f.hero, "remote", "get-url", "origin");
-	git(f.hero, "remote", "set-url", "origin", join(f.hero, "..", "missing.git"));
-	assert.equal(await f.run(["Offline.", "--label", "First"]), 0, f.err.join("\n"));
-	git(f.hero, "remote", "set-url", "origin", origin);
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "1", "the turn waits on the home");
-	await land({}, f.plain);
-	assert.equal(git(f.hero, "rev-list", "--count", "refs/remotes/origin/main..main"), "0");
-	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
-	assert.equal(heading(doc, "First"), 1);
-	assert.match(doc, /outcome: landed/);
-});
-
-test("a packed dive's turns are on the home already, so jumping it again drops their copies", async () => {
-	const f = await setup("repack");
-	await f.run(["One.", "--label", "First"]);
-	await pack({}, f.plain);
-	await jump({ ref: f.id }, f.plain);
-	assert.match(git(f.hero, "symbolic-ref", "--short", "HEAD"), /^nosedive-/);
-	assert.equal(heading(f.doc(f.id), "First"), 1);
-	assert.equal(git(f.hero, "rev-list", "--count", "main..HEAD"), "0", "the dive branch holds nothing the home lacks");
-	await f.run(["Two.", "--label", "Second"]);
-	await land({}, f.plain);
-	assert.equal(heading(f.doc(f.id), "First") + heading(f.doc(f.id), "Second"), 2);
 });
 
 test("crud refuses to edit or drop a held dive's doc, and edits it once packed", async () => {

@@ -12,7 +12,7 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
 import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
-import { diveBranch, putTurnOnHome, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { diveBranch, tokenOf } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 /** The dive branch a dive jumped from the hero's main has. */
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
@@ -661,23 +661,6 @@ test("pack and bail meet a replay conflict that only shows on a push retry befor
 		assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), dive, "still on the dive branch");
 		assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), dive, "and its checkout");
 	}
-});
-
-test("a turn is kept off a home that holds a commit a person made, and nothing of it is pushed", async () => {
-	const f = fixture("turn-person");
-	await jump({ ref: f.featId }, f.ctx);
-	const tree = join(tempDir("jump-wt"), "main-copy");
-	git(f.hero, "worktree", "add", "-q", tree, "main");
-	alike(tree, "a.md", "mine\n");
-	git(f.hero, "worktree", "remove", "--force", tree);
-	own(f.hero, "turn.md", "a turn\n", "a turn");
-	const before = originMain(f);
-	const home = git(f.hero, "rev-parse", "main");
-	const outcome = putTurnOnHome(findBridge(f.hero)!, "main", git(f.hero, "rev-parse", "HEAD"));
-	assert.equal(outcome.kind, "dive-branch-only");
-	assert.match("why" in outcome ? outcome.why : "", /main holds 1 commit origin\/main lacks that nosedive did not commit/);
-	assert.equal(originMain(f), before, "nothing published");
-	assert.equal(git(f.hero, "rev-parse", "main"), home, "the home is as it was");
 });
 
 test("a jump of a doc the hero does not know changes nothing: no upstream set, nothing published", async () => {
