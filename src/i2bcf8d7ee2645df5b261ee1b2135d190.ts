@@ -135,17 +135,21 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const d0 = runGit(hero.dir, "rev-parse", "HEAD").text;
 		const work = runGit(hero.dir, "rev-list", "--reverse", "--topo-order", d0, "--not", ...(already && heroSrcAtPlan !== "" ? [heroSrcAtPlan] : [`refs/heads/${home}`])).text.split("\n").filter(Boolean);
 		const set = new Set<Sha>();
+		// The dive's commits the home already holds at their place: reported, never published or listed as landed.
+		const heldOnHome = new Set<Sha>();
 		let heroTip: Sha = homePlan.tip;
 		// A rerun replays the dive as it is now: what the failed run landed is already on the home, so it replays to nothing.
 		if (work.length > 0) {
 			const replayed = replay(hero.dir, work, homePlan.tip, { turnsIn: keyOf(hero, dive.doc) });
 			if ("conflict" in replayed) throw new Error(`the hero's work conflicts with ${home}, so nothing was landed: rebase ${dive.branch} onto ${home}, then land ${id} again\n${replayed.conflict}`);
 			for (const sha of replayed.made) set.add(sha);
+			for (const sha of replayed.skipped) heldOnHome.add(sha);
 			const stamped = stampRange(hero.dir, homePlan.tip, replayed.tip, trailers);
 			for (const sha of stamped.made) set.add(sha);
 			heroTip = stamped.tip;
 			const count = runGit(hero.dir, "rev-list", "--count", `${homePlan.tip}..${heroTip}`).text;
 			if (count !== "0") notes.push(`- hero: ${count} commit${count === "1" ? "" : "s"} onto ${home}`);
+			for (const sha of replayed.skipped) notes.push(`- hero: already on ${home}: ${runGit(hero.dir, "log", "-1", "--format=%h %s", sha).text}`);
 		}
 
 		// Home, its work on it between the jump record and the land record, the dive branch gone (loop-returns-home).
@@ -158,7 +162,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const heroSrcRef = `refs/nosedive-landed-src/${hero.id}/${id}`;
 		const heroSrc = runGit(hero.dir, "rev-parse", "--verify", "-q", heroSrcRef).text;
 		pin(hero.dir, d0, []);
-		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%h %s", `${heroSrc}..${d0}`).text.split("\n").filter(Boolean).map((line) => `  hero: ${line}`));
+		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%H %h %s", `${heroSrc}..${d0}`).text.split("\n").filter(Boolean).filter((line) => !heldOnHome.has(line.slice(0, 40))).map((line) => `  hero: ${line.slice(41)}`));
 		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }, { ref: heroSrcRef, old: heroSrc || null, new: heroSrc || d0 }] } });

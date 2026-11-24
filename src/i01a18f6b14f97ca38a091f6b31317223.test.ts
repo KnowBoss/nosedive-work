@@ -355,6 +355,104 @@ for (const [label, around] of [
 	});
 }
 
+// What land says of the dive's commits the home already holds (land-skips-applied-turns): each one the replay skipped, by short SHA and subject.
+const diveCommits = (hero: string, base: string, id: string) => git(hero, "log", "--reverse", "--format=%h %s", `${base}..HEAD`).split("\n").filter(Boolean).map((line) => ({ line, turn: git(hero, "diff-tree", "--no-commit-id", "--name-only", "-r", line.slice(0, 7)) === `kb/${id}.md` }));
+
+// The replay skips a turn only when it conflicts with the later turns the home holds after it, so of two turns it is the first.
+test("two turns then a land with the person's commit before the first turn say the first turn is already on main", async () => {
+	const f = await setup("land-says-before");
+	const base = git(f.hero, "rev-parse", "main");
+	writeFileSync(join(f.hero, "a.txt"), "a");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "person a");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	const first = diveCommits(f.hero, base, f.id).filter((commit) => commit.turn)[0]!;
+	f.out.length = 0;
+	await land({}, f.plain);
+	assert.equal(f.out.join("\n"), [`landed ${f.id.slice(-6)}.ideas`, "- data: unchanged", "- hero: 1 commit onto main", `- hero: already on main: ${first.line}`].join("\n"));
+	assert.equal(heading(f.doc(f.id), "First"), 1);
+	assert.equal(heading(f.doc(f.id), "Second"), 1);
+});
+
+test("two turns then a land with the person's commits before, between and after say the first turn is already on main", async () => {
+	const f = await setup("land-says-around");
+	const base = git(f.hero, "rev-parse", "main");
+	const mine = (name: string) => {
+		writeFileSync(join(f.hero, `${name}.txt`), name);
+		git(f.hero, "add", "-A");
+		git(f.hero, "commit", "-qm", `person ${name}`);
+	};
+	mine("a");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	mine("b");
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	mine("c");
+	const first = diveCommits(f.hero, base, f.id).filter((commit) => commit.turn)[0]!;
+	f.out.length = 0;
+	await land({}, f.plain);
+	assert.equal(f.out.join("\n"), [`landed ${f.id.slice(-6)}.ideas`, "- data: unchanged", "- hero: 3 commits onto main", `- hero: already on main: ${first.line}`].join("\n"));
+	assert.equal(heading(f.doc(f.id), "First"), 1);
+	assert.equal(heading(f.doc(f.id), "Second"), 1);
+});
+
+test("a land that makes no hero commit because the home holds them all still reports the skipped turn", async () => {
+	const f = await setup("land-says-all-held");
+	const base = git(f.hero, "rev-parse", "main");
+	writeFileSync(join(f.hero, "a.txt"), "a");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "person a");
+	// The home gets the same change from elsewhere, as a different commit, so land has nothing of the person's to make.
+	const tree = join(f.hero, "..", "home-tree");
+	git(f.hero, "worktree", "add", "-q", tree, "main");
+	writeFileSync(join(tree, "a.txt"), "a");
+	git(tree, "add", "-A");
+	git(tree, "-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-qm", "person a on the home");
+	git(tree, "push", "-q", "origin", "HEAD:main");
+	git(f.hero, "worktree", "remove", "--force", tree);
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	const first = diveCommits(f.hero, base, f.id).filter((commit) => commit.turn)[0]!;
+	const home = git(f.hero, "rev-list", "--count", "main");
+	f.out.length = 0;
+	await land({}, f.plain);
+	assert.equal(f.out.join("\n"), [`landed ${f.id.slice(-6)}.ideas`, "- data: unchanged", `- hero: already on main: ${first.line}`].join("\n"));
+	// The home gains only the land record.
+	assert.equal(git(f.hero, "rev-list", "--count", "main"), String(Number(home) + 1));
+	assert.equal(heading(f.doc(f.id), "First"), 1);
+	assert.equal(heading(f.doc(f.id), "Second"), 1);
+});
+
+test("a land rerun does not list a skipped turn as landed now, but as already on main", async () => {
+	const f = await setup("land-rerun-skips");
+	const base = git(f.hero, "rev-parse", "main");
+	writeFileSync(join(f.hero, "a.txt"), "a");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "person a");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	const heroRemote = git(f.hero, "remote", "get-url", "origin");
+	const guard = join(f.hero, "..", "open").replace(/\\/g, "/");
+	// The home refuses the land's own commit until the guard file exists, so the failed run publishes none of the hero's work; turns are not refused.
+	writeFileSync(join(heroRemote, "hooks", "pre-receive"), `#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = "refs/heads/main" ] && [ ! -e "${guard}" ] && git log --format=%s "$old..$new" | grep -q '^land('; then\n    echo "injected home refusal" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.plain), /injected home refusal/);
+	// The dive is still on deck: two more turns reach the home as they are recorded, and the person commits again.
+	assert.equal(await f.run(["Three.", "--label", "Third"]), 0, f.err.join("\n"));
+	assert.equal(await f.run(["Four.", "--label", "Fourth"]), 0, f.err.join("\n"));
+	writeFileSync(join(f.hero, "late.txt"), "late");
+	git(f.hero, "add", "-A");
+	git(f.hero, "commit", "-qm", "person late");
+	writeFileSync(guard, "");
+	const commits = diveCommits(f.hero, base, f.id);
+	const turns = commits.filter((commit) => commit.turn);
+	const late = commits.at(-1)!;
+	f.out.length = 0;
+	await land({}, f.plain);
+	// The replay skips each turn the home holds followed by a later turn; the last turn is a no-op pick, so it is still listed.
+	assert.equal(f.out.join("\n"), [`landed ${f.id.slice(-6)}.ideas`, "- data: unchanged", "- hero: 2 commits onto main", ...turns.slice(0, 3).map((commit) => `- hero: already on main: ${commit.line}`), "- commits the failed land had not published, landed now:", `  hero: ${turns[3]!.line}`, `  hero: ${late.line}`].join("\n"));
+	for (const label of ["First", "Second", "Third", "Fourth"]) assert.equal(heading(f.doc(f.id), label), 1, label);
+});
+
 test("land pushes a turn that could not be, with its record", async () => {
 	const f = await setup("land-kept");
 	const origin = git(f.hero, "remote", "get-url", "origin");
