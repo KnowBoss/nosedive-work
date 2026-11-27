@@ -86,7 +86,7 @@ test("refuses, changing nothing and throwing no turn away, when the home's copy 
     await jump({ ref: f.featId }, f.ctx);
     const t = await turner(f);
     const origin = git(f.hero, "remote", "get-url", "origin");
-    await t.turn("One.", "First");
+    const turned = await t.turn("One.", "First");
     onOrigin(f, (clone) => {
         const path = join(clone, "kb", `${t.id}.md`);
         writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
@@ -103,7 +103,7 @@ test("refuses, changing nothing and throwing no turn away, when the home's copy 
     });
 
     assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved);
-    assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+    assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\trefs/nosedive/${f.heroId}/dives/${t.id}`, "only what the turn pushed is on the origin");
     assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
     assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
     assert.equal(sections(f.doc(t.id), "First"), 1, "the turn is on the dive branch");

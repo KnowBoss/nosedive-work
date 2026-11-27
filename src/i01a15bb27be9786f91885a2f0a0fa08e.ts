@@ -252,6 +252,56 @@ export function diveRef(hero: Hero, diveId: string): string {
 	return `refs/nosedive/${hero.id}/dives/${diveId}`;
 }
 
+/**
+ * The local ref in a repo's checkout that holds the sha this dive last left on its dive ref there, which every push of that ref
+ * is leased on. It is never pushed or fetched, and a rebase leaves it alone, which is why a fast-forward-only push would not do
+ * (turn-lease-sha-kept-where).
+ */
+export function leaseRef(diveId: string): string {
+	return `refs/nosedive-lease/${diveId}`;
+}
+
+/** The sha the dive's ref is leased at in a checkout; null when the ref was absent when the dive was picked up and nothing has been pushed to it since. */
+export function leased(dir: string, diveId: string): Sha | null {
+	return runGit(dir, "rev-parse", "--verify", "-q", leaseRef(diveId)).text || null;
+}
+
+/** What a turn's push of the dive's committed work did: the repos whose dive ref it moved, why each other was not pushed, and the repos holding uncommitted changes, which it never backs up. */
+export type BackedUp = { pushed: string[]; refused: { name: string; why: string }[]; uncommitted: string[] };
+
+/**
+ * Pushes the dive's committed work to its ref in each writable scope's repo and then the hero's (turns-pushed-where), the same
+ * ref pack keeps. Each push is leased on the sha this dive last left there, never bare (turn-push-lease), and moves that sha only
+ * once it has succeeded. It commits nothing, so uncommitted changes are named and left; a push that fails leaves what is committed
+ * where it is for the next turn, pack or land.
+ */
+export function backUp(dive: Dive): BackedUp {
+	const { hero } = dive;
+	const id = String(dive.doc.fm.id);
+	const own = diveRef(hero, id);
+	const repos = [
+		...dive.scopes.filter((scope) => scope.branch && scope.ours).map((scope) => ({ name: scope.name, dir: scope.dir, base: baseOf(scope) })),
+		{ name: "hero", dir: hero.dir, base: undefined },
+	];
+	const done: BackedUp = { pushed: [], refused: [], uncommitted: [] };
+	for (const repo of repos) {
+		if (runGit(repo.dir, "status", "--porcelain").text) done.uncommitted.push(repo.name);
+		const tip = must(repo.dir, "rev-parse", "HEAD");
+		// A scope holding nothing its base lacks has no work to keep; the hero always holds the turn.
+		if (repo.base && must(repo.dir, "rev-list", "--count", `${repo.base}..${tip}`) === "0") continue;
+		const lease = leased(repo.dir, id);
+		if (lease === tip) continue;
+		try {
+			const outcome = commitPlan({ steps: [{ repo: repo.name, dir: repo.dir, remote: { name: "origin", updates: [{ ref: own, old: lease, new: tip, fastForward: false, publishes: diveWork(repo.dir, tip, lease) }] }, local: { moves: [{ ref: leaseRef(id), old: lease, new: tip }] } }] }, "turn");
+			if (outcome.ok) done.pushed.push(repo.name);
+			else done.refused.push({ name: repo.name, why: outcome.refusal.detail });
+		} catch (error) {
+			done.refused.push({ name: repo.name, why: (error as Error).message });
+		}
+	}
+	return done;
+}
+
 /** The subject of the commit pack makes of uncommitted work, which jump undoes. */
 export function wip(dive: Doc): string {
 	return `pack(${String(dive.fm.name)}): work in progress`;
@@ -843,14 +893,16 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 	// Every lease is checked before anything is committed or pushed, against what the dive doc recorded at its last jump
 	// or pack: local refs are no record, since any fetch into a repo's shared cache moves them. Each ref must hold the
 	// recorded commit or older work of the dive; the dive's own ref may also hold a commit this checkout has, its own
-	// earlier publish, so a retry goes on.
+	// earlier publish, so a retry goes on, or the one it last left there, which a turn's push leaves (the lease below).
 	const observed = new Map(puts.map((put) => [put.key, diveRefs(put.dir, id)]));
 	const within = (dir: string, sha: string, tip: string | undefined) => tip !== undefined && runGit(dir, "merge-base", "--is-ancestor", sha, tip).ok;
+	const leases = new Map(puts.map((put) => [put.key, leased(put.dir, id)]));
 	const moved = puts.flatMap((put) => {
 		const current = observed.get(put.key)!;
-		if (current.length === 0 && put.recorded !== undefined && put.sha) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
+		const lease = leases.get(put.key)!;
+		if (current.length === 0 && (put.recorded !== undefined || lease !== null) && put.sha) return [`${put.name}: the dive's ref is gone, which this dive did not see`];
 		return current.flatMap(({ ref, sha }) => {
-			if (within(put.dir, sha, put.recorded) || (ref === own && (sha === put.tip || sha === put.head0 || runGit(put.dir, "rev-parse", "--verify", "-q", pushedRef(put.dir, sha)).ok))) return [];
+			if (within(put.dir, sha, put.recorded) || (ref === own && (sha === lease || sha === put.tip || sha === put.head0 || runGit(put.dir, "rev-parse", "--verify", "-q", pushedRef(put.dir, sha)).ok))) return [];
 			return [`${put.name}: ${ref} is at ${sha.slice(0, 7)}, which this dive did not see`];
 		});
 	});
@@ -885,16 +937,22 @@ function putDownOnce(dive: Dive, version: string, command: string, record: (done
 			if (there?.sha !== put.sha) updates.push({ ref: own, old: there?.sha ?? null, new: put.sha, fastForward: false, publishes: diveWork(put.dir, put.sha, there?.sha ?? null) });
 		}
 		for (const { ref, sha } of put.sha ? seen.filter((each) => each.ref !== own) : seen) updates.push({ ref, old: sha, new: null, fastForward: false });
-		if (isHero) updates.push(homeUpdate(homePlan, made.tip, [made.tip]));
 		const held = localDiveRefs(put.dir, id);
 		const moves: LocalMove[] = held.map(({ ref, sha }) => ({ ref, old: sha, new: put.sha && ref === own ? put.sha : null }));
 		if (put.sha && !held.some(({ ref }) => ref === own)) moves.push({ ref: own, old: null, new: put.sha });
-		if (put.dirty) moves.push({ ref: branch, old: put.head0!, new: put.tip! });
-		if (isHero) moves.push({ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip });
+		// The sha this dive left on its ref follows the push of that ref, not the home's record after it, which may yet be refused.
+		moves.push({ ref: leaseRef(id), old: leases.get(put.key)!, new: put.sha ?? null });
+		const later: LocalMove[] = [];
+		if (put.dirty) later.push({ ref: branch, old: put.head0!, new: put.tip! });
+		if (isHero) later.push({ ref: `refs/heads/${home}`, old: homePlan.old, new: made.tip });
 		// The index catches up with the held work, the tree untouched, so the files can then follow.
+		const files = put.dirty ? { files: { from: put.tip!, to: put.tip!, index: put.tip! } } : {};
 		const noted = runGit(put.dir, "for-each-ref", "--format=%(refname) %(objectname)", `refs/nosedive-pushed/${hero.id}/${id}`).text.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string]);
 		if (put.sha) steps.push({ repo: put.name, dir: put.dir, local: { moves: [{ ref: pushedRef(put.dir, put.sha), old: noted.find(([ref]) => ref === pushedRef(put.dir, put.sha!))?.[1] ?? null, new: put.sha }] } });
-		steps.push({ repo: put.name, dir: put.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves, ...(put.dirty ? { files: { from: put.tip!, to: put.tip!, index: put.tip! } } : {}) } });
+		if (isHero) {
+			steps.push({ repo: put.name, dir: put.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves } });
+			steps.push({ repo: put.name, dir: put.dir, remote: { name: "origin", updates: [homeUpdate(homePlan, made.tip, [made.tip])] }, local: { moves: later, ...files } });
+		} else steps.push({ repo: put.name, dir: put.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves: [...moves, ...later], ...files } });
 		const drop: LocalMove[] = [{ ref: branch, old: put.tip!, new: null }, ...noted.filter(([ref]) => !put.sha || ref !== pushedRef(put.dir, put.sha!)).map(([ref, sha]) => ({ ref, old: sha, new: null })), ...(put.sha ? [{ ref: pushedRef(put.dir, put.sha), old: put.sha, new: null }] : [])];
 		if (isHero) after.push({ repo: put.name, dir: put.dir, local: { head: { from: { branch: dive.branch }, to: { branch: home } }, files: { from: put.tip!, to: made.tip }, drop } });
 		else {

@@ -728,7 +728,7 @@ test("refuses, changing nothing, when the home's copy of the dive doc changed si
 	await jump({ ref: f.featId }, f.ctx);
 	const t = await turner(f);
 	const origin = git(f.hero, "remote", "get-url", "origin");
-	await t.turn("One.", "First");
+	const turned = await t.turn("One.", "First");
 	onOrigin(f, (clone) => {
 		const path = join(clone, "kb", `${t.id}.md`);
 		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
@@ -749,7 +749,7 @@ test("refuses, changing nothing, when the home's copy of the dive doc changed si
 	});
 
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "nothing was pushed");
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\trefs/nosedive/${f.heroId}/dives/${t.id}`, "only what the turn pushed is on the origin");
 	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
@@ -912,5 +912,28 @@ test("a home whose copy of the dive doc moves after the earlier pushes is report
 	assert.doesNotMatch(doc, /A note from elsewhere\./, "the change was reverted, as the message asked");
 	assert.equal(f.remoteRef(ref), committed);
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+	assert.throws(() => f.onDeck(), "nothing is held");
+});
+
+test("a home that moves after the earlier pushes without touching the dive doc is no refusal: the pack plans again and finishes in the same run", async () => {
+	const f = fixture("pack-window-unrelated");
+	await jump({ ref: f.featId }, f.ctx);
+	const t = await turner(f);
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	await t.turn("One.", "First");
+	const committed = f.commit("idea.md", "an idea\n");
+	moveHomeWhenScopePushed(f, (clone) => {
+		writeFileSync(join(clone, "elsewhere.md"), "elsewhere\n");
+		git(clone, "add", "-A");
+		git(clone, "commit", "-qm", "unrelated");
+	});
+
+	await pack({}, t.plain);
+
+	const doc = git(origin, "show", `refs/heads/main:kb/${t.id}.md`);
+	assert.equal(sections(doc, "First"), 1);
+	assert.equal(sections(doc, "packed"), 1);
+	assert.equal(git(origin, "show", "refs/heads/main:elsewhere.md"), "elsewhere", "the other commit is under the record");
+	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${t.id}`), committed);
 	assert.throws(() => f.onDeck(), "nothing is held");
 });

@@ -13,7 +13,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
-import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, Stale, carry, diveBranch, diveBranches, diveRef, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, leaseRef, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -165,6 +165,8 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
 	const branch = diveBranch(token, diveId);
 	const holder = `${me}#${token}`;
+	// A dive picked up holds each repo's dive ref at the sha just fetched, under the diver token it takes: a push of the ref by any other holder after that is refused by the lease (turn-lease-sha-kept-where). A ref not there leaves nothing leased.
+	const leasing = (dir: string): LocalMove => ({ ref: leaseRef(diveId), old: shaOf(dir, leaseRef(diveId)), new: shaOf(dir, diveRef(hero, diveId)) });
 
 	// A checkout already where the dive wants it is the diver's to change; any other must lose nothing by moving.
 	const plan = readScopes(hero, target).map((entry): Planned => {
@@ -245,6 +247,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			moves.push({ ref: local, old, new: parent ?? tip });
 			to = { branch: scope.local };
 			config = [[`branch.${scope.local}.remote`, "origin"], [`branch.${scope.local}.merge`, `refs/heads/${scope.branch}`]];
+			if (mode === "record") moves.push(leasing(scope.dir));
 		} else {
 			tip = shaOf(scope.dir, `refs/remotes/origin/${repoTrunk}`)!;
 			files = { from: here, to: tip };
@@ -315,6 +318,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		const moves: LocalMove[] = [];
 		if (record) moves.push({ ref: `refs/heads/${home}`, old: up.tip, new: record.tip });
 		moves.push({ ref: heroLocal, old: shaOf(hero.dir, heroLocal), new: parent ?? dTip });
+		if (record) moves.push(leasing(hero.dir));
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,

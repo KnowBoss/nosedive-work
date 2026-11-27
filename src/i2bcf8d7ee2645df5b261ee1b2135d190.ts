@@ -3,7 +3,7 @@ import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "nosedive-core";
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, assertHomeUnmoved, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, assertHomeUnmoved, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, keyOf, leased, leaseRef, localDiveRefs, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): Promise<void> {
@@ -118,7 +118,9 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			// The tip this land published, written down before it pushed: in recovery it is the only thing the dive's refs may be judged against.
 			const landedRef = `refs/nosedive-landed-scope/${hero.id}/${id}/${scope.repoId}`;
 			const landedTip = runGit(scope.dir, "rev-parse", "--verify", "-q", landedRef).text;
-			const kept = (sha: Sha) => sha === scope.ref || (landedTip !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, landedTip).ok) || (source !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, source).ok) || (scope.ref !== undefined && runGit(scope.dir, "merge-base", "--is-ancestor", sha, scope.ref).ok) || runGit(scope.dir, "merge-base", "--is-ancestor", sha, head).ok;
+			// The sha this dive last left on its ref, by a turn or a pack, is its own, rebased since or not.
+			const lease = leased(scope.dir, id);
+			const kept = (sha: Sha) => sha === scope.ref || sha === lease || (landedTip !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, landedTip).ok) || (source !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, source).ok) || (scope.ref !== undefined && runGit(scope.dir, "merge-base", "--is-ancestor", sha, scope.ref).ok) || runGit(scope.dir, "merge-base", "--is-ancestor", sha, head).ok;
 			const lost = seen.filter(({ sha }) => !kept(sha));
 			if (lost.length > 0) throw new Error(`nothing was landed: ${scope.name}: ${lost.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 			const stampedHead = base && runGit(scope.dir, "rev-list", "--count", `${base}..${head}`).text === "0" ? undefined : stampRange(scope.dir, base, head, trailers);
@@ -138,7 +140,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			];
 			steps.push({ repo: scope.name, dir: scope.dir, ...(updates.length > 0 ? { remote: { name: "origin", updates } } : {}), local: { moves } });
 			// Left where it landed, its branch gone: the work branch holds it now.
-			after.push({ repo: scope.name, dir: scope.dir, local: { head: { from: { branch: dive.branch }, to: { detached: tip } }, drop: [{ ref: branch, old: tip, new: null }, { ref: sourceRef, old: source || head, new: null }, { ref: landedRef, old: tip, new: null }] } });
+			after.push({ repo: scope.name, dir: scope.dir, local: { head: { from: { branch: dive.branch }, to: { detached: tip } }, drop: [{ ref: branch, old: tip, new: null }, { ref: sourceRef, old: source || head, new: null }, { ref: landedRef, old: tip, new: null }, ...(lease ? [{ ref: leaseRef(id), old: lease, new: null }] : [])] } });
 		}
 
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
@@ -195,7 +197,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const heroSrc = runGit(hero.dir, "rev-parse", "--verify", "-q", heroSrcRef).text;
 		pin(hero.dir, d0, []);
 		if (heroSrc !== "") later.push(...runGit(hero.dir, "log", "--reverse", "--format=%H %h %s", `${heroSrc}..${d0}`).text.split("\n").filter((line) => line && !turns.has(line.split(" ")[0]!)).map((line) => `  hero: ${line.slice(line.indexOf(" ") + 1)}`));
-		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
+		const heroLease = leased(hero.dir, id);
+		const lostHero = heroSeen.filter(({ sha }) => !(sha === recorded || sha === heroLease || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 		if (!already) steps.push({ repo: "hero", dir: hero.dir, local: { moves: [{ ref: markerRef, old: marker ?? null, new: made.tip }, { ref: heroSrcRef, old: heroSrc || null, new: heroSrc || d0 }] } });
 		steps.push({
@@ -213,7 +216,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			},
 		});
 		// The marker goes only once everything else is done; it is not verified up front, since an earlier step writes it.
-		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: already ? marker! : made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || d0, new: null }] : [])] } });
+		after.push({ repo: "hero", dir: hero.dir, local: { drop: [{ ref: markerRef, old: already ? marker! : made.tip, new: null }, ...(heroSrc || !already ? [{ ref: heroSrcRef, old: heroSrc || d0, new: null }] : []), ...(heroLease ? [{ ref: leaseRef(id), old: heroLease, new: null }] : [])] } });
 		if (later.length > 0) notes.push("- commits the failed land had not published, landed now:", ...later);
 		assertHomeUnmoved(hero, up, homePlan.upstream);
 		carry({ steps, after }, "land");
