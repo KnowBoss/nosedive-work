@@ -2,11 +2,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { featRoot, isDurable, kingsmetal } from "nosedive-core";
-import type { Args, Ctx, Head, LocalMove, LocalStep, Sha, Step } from "nosedive-core";
+import type { ActionCall, Args, Ctx, Head, LocalMove, LocalStep, Sha, Step } from "nosedive-core";
 import { replay } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
+import { i01a1335480147d0686528aee80f8ee34 as namespacedUuid } from "nosedive-core";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc, type KbDoc } from "nosedive-core";
 import { i01a15baf13e27bd88dc880d4871f2210 as hydrateRepo } from "nosedive-core";
 import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core";
@@ -27,6 +28,37 @@ type Planned = ScopeEntry & { repo: Doc; name: string; dir: string; shown: strin
 type Mode = "again" | "rebuild" | "record";
 
 const LISTED = /^(?:.*[\\/])?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i;
+const QUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A quid when a ref is one, or a path ending one; an invalid path stays direct so its old no-doc refusal remains. */
+function directRef(ref: string): string | undefined {
+	const listed = LISTED.exec(ref)?.[1];
+	return listed?.toLowerCase() ?? (QUID.test(ref) || /[\\/]/.test(ref) || ref.toLowerCase().endsWith(".md") ? ref.toLowerCase() : undefined);
+}
+
+/** Resolves a name only through core's `next` action, so jump and next cannot grow different open-work lists. */
+async function resolveListedName(hero: Hero, name: string, ctx: Ctx): Promise<Doc> {
+	const core = ctx.capes[0]!;
+	const found = Object.entries(core.docs).find(([, doc]) => doc.kind === "action" && doc.name === "next");
+	const usage = found?.[1].usages.find((each) => each.text === "next");
+	const entry = found && core.index[namespacedUuid(found[0], core.id)];
+	if (!usage || typeof entry !== "function") throw new Error("core has no next action for jump to resolve a name");
+	const printed: string[] = [];
+	await (entry as (call: ActionCall) => Promise<void>)({ usage: `u${usage.id}`, args: {}, ctx: { ...ctx, out: (text) => void printed.push(text) } });
+	const matches = printed
+		.flatMap((text) => text.split(/\r?\n/))
+		.flatMap((line) => {
+			const row = /^  (\S+) (.+?)  (.+\.md)$/.exec(line);
+			const id = row && LISTED.exec(row[3]!)?.[1]?.toLowerCase();
+			const doc = id && heroDoc(hero, id);
+			return doc && (isWorkDive(doc) || featRoot(hero, id)) && String(doc.fm.name) === name ? [{ kind: row![1]!, name, id, doc }] : [];
+		});
+	if (matches.length === 0) throw new Error(`no open dive or feat has the name ${name}: \`nosedive next\` lists the names jump takes`);
+	if (matches.length > 1) throw new Error(`several open dives or feats have the name ${name}:\n  ${matches.map((match) => `${match.kind}  ${match.name}  ${match.id}`).join("\n  ")}`);
+	const match = matches[0]!;
+	ctx.out(`jump: ${name} resolved to ${match.id}`);
+	return match.doc;
+}
 
 /** The commit a ref names, or null when there is none. */
 function shaOf(dir: string, ref: string): Sha | null {
@@ -76,7 +108,11 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 	try {
 		if (deck && deckDoc && isWorkDive(deckDoc)) {
 			// On a dive branch, only its dive: set up again, losing nothing (one-dive-branch-per-checkout).
-			if (typeof args.ref === "string" && args.ref !== deck.diveId) throw new Error(`the hero is on dive ${named(deckDoc)}'s branch: pack, land or bail it first`);
+			if (typeof args.ref === "string") {
+				const direct = directRef(args.ref);
+				const id = direct ?? String((await resolveListedName(hero, args.ref, ctx)).fm.id);
+				if (id !== deck.diveId) throw new Error(`the hero is on dive ${named(deckDoc)}'s branch: pack, land or bail it first`);
+			}
 			refuseOver(hero, deckDoc, on, deck.token);
 			target = deckDoc;
 			token = deck.token;
@@ -89,7 +125,7 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 			const inside = relative(hero.dir, hero.workspace).replace(/\\/g, "/");
 			const dirty = runGit(hero.dir, "status", "--porcelain", "--", ".", ...(inside && !inside.startsWith("..") ? [`:(exclude)${inside}`] : [])).text;
 			if (dirty) throw new Error("the hero has uncommitted changes, and jump switches its branch: commit them first (jump-needs-clean-tree)");
-			const wanted = typeof args.ref === "string" ? args.ref.replace(LISTED, "$1").toLowerCase() : undefined;
+			const wanted = typeof args.ref === "string" ? directRef(args.ref) : undefined;
 			// The home onto its upstream, locally: nothing is pushed and no config is written until the commit.
 			const resolved = resolveUpstream(hero, home);
 			adopted = { message: resolved.adopted, config: resolved.config };
@@ -106,6 +142,8 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 				const found = heroDoc(hero, wanted);
 				if (!found) throw new Error(`no doc ${String(args.ref)} in the hero on ${home}`);
 				target = found;
+			} else if (typeof args.ref === "string") {
+				target = await resolveListedName(hero, args.ref, ctx);
 			} else {
 				const held = open.filter((doc) => metaOf(doc).diver === holder);
 				const free = open.filter((doc) => !metaOf(doc).diver && (metaOf(doc).packer ?? me) === me);

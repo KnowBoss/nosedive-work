@@ -9,6 +9,7 @@ import { i0735c57383365d4ca5395ea24f5b0649 as pack } from "./i0735c57383365d4ca5
 import { i2bcf8d7ee2645df5b261ee1b2135d190 as land } from "./i2bcf8d7ee2645df5b261ee1b2135d190.ts";
 import { iffc777778a63553ba90babcc038eb748 as bail } from "./iffc777778a63553ba90babcc038eb748.ts";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
+import { i01a1335480147d0686528aee80f8ee34 as namespacedUuid } from "nosedive-core";
 import { i01a13354894273b1be253424511ba82c as commitFiles } from "nosedive-core";
 import { fixture, git, tempDir } from "../test/harness.ts";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
@@ -18,6 +19,14 @@ import { diveBranch, putTurnOnHome, tokenOf } from "./i01a15bb27be9786f91885a2f0
 const branchOf = (f: ReturnType<typeof fixture>, id: string) => diveBranch(tokenOf(findBridge(f.hero)!, "main"), id);
 /** What jump ends with, naming the dive's brief (jump-starts-the-work). */
 const nudge = (brief: string) => `Now do the dive's work, from its brief, ${brief}, to its feat's Done when; pack or land it only when the pilot asks.`;
+
+/** Makes the fixture's core `next` action print these open-work rows. */
+function nextLists(f: ReturnType<typeof fixture>, ...rows: string[]): void {
+	const core = f.ctx.capes[0]!;
+	const docId = "01a19eb4-7054-7ce5-935e-03ab6c97a715";
+	core.docs[docId] = { kind: "action", name: "next", gist: "Lists open work", usages: [{ id: "bc5113a84ba55195add71cac33f0bf20", text: "next" }], top: true, text: "", body: "" };
+	core.index[namespacedUuid(docId, core.id)] = async (call: { ctx: typeof f.ctx }) => call.ctx.out([...rows, "", "pick one"].join("\n"));
+}
 
 test("a feat the root reaches gets a dive with its scopes, naming the feat and linked from it as dives.feat, the hero and its scope on its dive branch, held by this checkout, its bookkeeping on the home it was jumped from", async () => {
 	const f = fixture("jump-feat");
@@ -50,6 +59,8 @@ test("jump's usage, which --help --more prints, says what it does with uncommitt
 	assert.match(usage, /A checkout already where the dive wants it, as on a dive branch, is left as it is/);
 	assert.match(usage, /pack's work-in-progress commit on this dive is undone, so packed work comes back uncommitted/);
 	assert.match(usage, /to do the dive's work now, from its brief to its feat's Done when, and to pack or land it only when the pilot asks/);
+	assert.match(usage, /name of an open feat or dive `next` lists/);
+	assert.match(usage, /several are refused with each match's kind, name and quid/);
 });
 
 test("a dive named feat first, as dives were before names went hex first, is jumped by its quid and keeps its name, and every jump ends with the nudge naming its brief", async () => {
@@ -83,6 +94,50 @@ test("takes a doc's path as next prints it, a feat's or a dive's, for its quid (
 	assert.equal(f.onDeck(), id, "the dive by its Windows path, in any case");
 	await pack({}, f.ctx);
 	await assert.rejects(jump({ ref: "kb/nope.md" }, f.ctx), /no doc kb\/nope\.md in the hero/);
+});
+
+test("takes an open dive by the name next lists and prints the quid it resolved", async () => {
+	const f = fixture("jump-dive-name");
+	const id = f.plan();
+	const name = `ideas.${id.slice(-6)}`;
+	nextLists(f, `ideas  kb/${f.featId}.md`, `  work:dive ${name}  kb/${id}.md`);
+	await jump({ ref: name }, f.ctx);
+	assert.equal(f.onDeck(), id);
+	assert.ok(f.out.includes(`jump: ${name} resolved to ${id}`));
+});
+
+test("takes an open feat by the name next lists and prints the quid it resolved", async () => {
+	const f = fixture("jump-feat-name");
+	nextLists(f, `hero  kb/${f.heroId}.md`, `  memo ideas  kb/${f.featId}.md`);
+	await jump({ ref: "ideas" }, f.ctx);
+	assert.ok(f.out.includes(`jump: ideas resolved to ${f.featId}`));
+});
+
+test("refuses an ambiguous open name before changing anything, listing every kind, name and quid", async () => {
+	const f = fixture("jump-name-ambiguous");
+	const id = f.plan();
+	const path = join(f.hero, "kb", `${id}.md`);
+	writeFileSync(path, f.doc(id).replace(/\nname: .*\n/, "\nname: ideas\n"));
+	git(f.hero, "add", path);
+	git(f.hero, "commit", "-q", "-m", "give two open docs one name");
+	git(f.hero, "push", "-q", "origin", "HEAD:main");
+	nextLists(f, `hero  kb/${f.heroId}.md`, `  memo ideas  kb/${f.featId}.md`, `ideas  kb/${f.featId}.md`, `  work:dive ideas  kb/${id}.md`);
+	const before = git(f.hero, "rev-parse", "HEAD");
+	await assert.rejects(jump({ ref: "ideas" }, f.ctx), new RegExp(`several open dives or feats have the name ideas:\\n  memo  ideas  ${f.featId}\\n  work:dive  ideas  ${id}$`));
+	assert.equal(git(f.hero, "rev-parse", "HEAD"), before);
+	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
+});
+
+test("an unknown name says no open dive or feat has it and points at next", async () => {
+	const f = fixture("jump-name-unknown");
+	nextLists(f, `hero  kb/${f.heroId}.md`, `  memo ideas  kb/${f.featId}.md`);
+	await assert.rejects(jump({ ref: "unplanned" }, f.ctx), /no open dive or feat has the name unplanned: `nosedive next` lists the names jump takes$/);
+});
+
+test("a known doc's name is unknown when next does not list that doc", async () => {
+	const f = fixture("jump-name-unlisted");
+	nextLists(f, `hero  kb/${f.heroId}.md`, `  memo ideas  kb/${f.featId}.md`);
+	await assert.rejects(jump({ ref: "data" }, f.ctx), /no open dive or feat has the name data: `nosedive next` lists the names jump takes$/);
 });
 
 test("a hero with a branch named nosedive still gets its dive branch, which is one segment", async () => {
