@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { featRoot, isDurable, kingsmetal } from "nosedive-core";
 import type { Args, Ctx, Head, LocalMove, LocalStep, Sha, Step } from "nosedive-core";
-import { replay } from "nosedive-core";
+import { commitOffside, docAt, replay } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a141f869c07c4da8288927a559c8ae as mintKbDoc } from "nosedive-core";
 import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
@@ -13,7 +13,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
-import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, heroRef, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, tokenOfRef, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, heroRef, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, landBegun, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, tokenOfRef, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -67,6 +67,7 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 	let home: string;
 	let token: string;
 	let mode: Mode;
+	let takeover: string | undefined;
 	let homePlan: HomePlan | undefined;
 	let adopted: { message?: string; config: [string, string][] } = { config: [] };
 	let synced = "";
@@ -130,7 +131,10 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 					const [email, other] = meta.diver.split("#") as [string, string | undefined];
 					if (!other) throw new Error(`dive ${String(target.fm.name)} is held by ${email}, in no checkout in particular: only a checkout whose git user.email is ${email} can take it over (legacy-bare-diver)`);
 					const from = homeOf(hero, other);
-					throw new Error(`dive ${String(target.fm.name)} is held by ${email}${from ? ` from ${from} in this checkout: switch to it, then jump it` : email === me ? " in another checkout of the hero: pack it there" : ""} (held-by-checkout)`);
+					// --sure takes over a dive whose land its holder's checkout stopped in the middle of: only another checkout can finish it from the markers it left on origin.
+					const remotes = readScopes(hero, target).flatMap((entry) => ((repoDoc(hero, entry.repoId).fm.meta as { remotes?: { origin?: unknown } } | undefined)?.remotes?.origin ?? []) as string[] | string);
+					if (sure && !from && landBegun(hero, String(target.fm.id), remotes)) takeover = other;
+					else throw new Error(`dive ${String(target.fm.name)} is held by ${email}${from ? ` from ${from} in this checkout: switch to it, then jump it` : email === me ? " in another checkout of the hero: pack it there" : ""} (held-by-checkout)`);
 				}
 				if (!meta.diver && meta.packer && meta.packer !== me && !sure) throw new Error(`dive ${String(target.fm.name)} was packed by ${meta.packer}: jump it --sure to take it over, its work in progress included (take-over-with-sure)`);
 				mode = meta.diver === holder ? "rebuild" : "record";
@@ -149,7 +153,7 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 				mode = "record";
 			}
 		}
-		return await jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan, adopted, version });
+		return await jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan, adopted, version, takeover });
 	} catch (error) {
 		// A jump that refuses after it synced the home says so.
 		if (synced && error instanceof Error && !(error instanceof Stale)) error.message = `${error.message}\n${synced}`;
@@ -157,9 +161,9 @@ async function jumpOnce(args: Args, ctx: Ctx): Promise<void> {
 	}
 }
 
-type Planning = { ctx: Ctx; hero: Hero; me: string; target: Doc; home: string; token: string; mode: Mode; homePlan: HomePlan | undefined; adopted: { message?: string; config: [string, string][] }; version: string };
+type Planning = { ctx: Ctx; hero: Hero; me: string; target: Doc; home: string; token: string; mode: Mode; homePlan: HomePlan | undefined; adopted: { message?: string; config: [string, string][] }; version: string; takeover?: string };
 
-async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan, adopted, version }: Planning): Promise<void> {
+async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan, adopted, version, takeover }: Planning): Promise<void> {
 	const isDive = isWorkDive(target);
 	const again = mode !== "record";
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
@@ -225,7 +229,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			const work = shaOf(scope.dir, `refs/remotes/origin/${scope.branch}`);
 			tip = old ?? work ?? shaOf(scope.dir, `refs/remotes/origin/${repoTrunk}`)!;
 			// The dive's work may have been packed from another checkout, or rebased there.
-			const packed = newestRef(scope.dir, diveId, token, scope.ref);
+			const packed = newestRef(scope.dir, diveId, takeover ?? token, scope.ref);
 			if (packed && !isAncestor(scope.dir, packed, tip)) {
 				if (!isAncestor(scope.dir, tip, packed)) keep(tip);
 				tip = packed;
@@ -261,7 +265,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	}
 
 	const steps: Step[] = [];
-	const heroPacked = newestRef(hero.dir, diveId, token, heroRef(hero, target));
+	const heroPacked = newestRef(hero.dir, diveId, takeover ?? token, heroRef(hero, target));
 	const heroLocal = `refs/heads/${branch}`;
 	let record: { tip: Sha } | undefined;
 	let upstreamNote = "";
@@ -275,7 +279,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		let base = up.tip;
 		let update: ReturnType<typeof homeUpdate> | undefined;
 		if (mode === "record") {
-			const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId, token, scope.ref)]));
+			const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId, takeover ?? token, scope.ref)]));
 			refs.set(hero.id!, heroPacked);
 			const replayed = heroPacked ? String(Number(runGit(hero.dir, "rev-list", "--count", heroPacked, "--not", `refs/heads/${home}`).text) - turnCommits(hero, target, `refs/heads/${home}`, heroPacked).length) : "0";
 			if (replayed !== "0") lines.push(`- hero: ${replayed} commit${replayed === "1" ? "" : "s"} replayed`);
@@ -292,7 +296,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			}
 			const doc = minted ? minted.doc : heroDoc(hero, diveId)!;
 			const current = isDive ? metaOf(heroDoc(hero, diveId)!).diver : undefined;
-			if (current && current !== holder && !bareDiverIs(current, me)) throw new Error(`dive ${String(doc.fm.name)} was picked up by ${current.split("#")[0]} meanwhile`);
+			if (current && current !== holder && !bareDiverIs(current, me) && !takeover) throw new Error(`dive ${String(doc.fm.name)} was picked up by ${current.split("#")[0]} meanwhile`);
 			const change = { action: "jump", label: "jumped", summary: `${me} picked it up`, meta: { diver: holder, packer: null }, scopes: scopesWith(hero, doc as never, refs), lines: [`${me} picked it up.`, "", ...lines] };
 			record = recordOn(hero, up.tip, rel, change, version, { base: minted?.doc ?? undefined, extra: minted?.extra });
 			base = record.tip;
@@ -309,6 +313,22 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 				const replayed = replay(hero.dir, fresh, base);
 				if ("conflict" in replayed) throw new Error(`the dive's packed hero work conflicts with ${home}, so nothing was recorded: it stays on ${heroPacked.slice(0, 7)}, to cherry-pick by hand\n${replayed.conflict}`);
 				dTip = replayed.tip;
+			}
+			// A dive taken over was never packed, so no record of the home holds its turns' sections: they ride in one turn commit of their own, which the put-down counts and leaves out of its replay.
+			if (takeover && turns.size > 0) {
+				const rel = keyOf(hero, target);
+				let text = docAt(hero.dir, dTip, rel)?.text;
+				let appended = 0;
+				for (const sha of turns) {
+					const turned = docAt(hero.dir, sha, rel)?.text;
+					const before = docAt(hero.dir, `${sha}^`, rel)?.text.trimEnd();
+					if (text === undefined || turned === undefined || before === undefined || !turned.startsWith(before)) continue;
+					const piece = turned.slice(before.length);
+					if (text.includes(piece.trim())) continue;
+					text = `${text.trimEnd()}${piece}`;
+					appended++;
+				}
+				if (appended > 0 && text !== undefined) dTip = commitOffside(hero.dir, dTip, { [rel]: text }, `feat(${String(target.fm.name)}): pass turn`, version).tip;
 			}
 		}
 		const parent = wipOn(hero.dir, dTip);

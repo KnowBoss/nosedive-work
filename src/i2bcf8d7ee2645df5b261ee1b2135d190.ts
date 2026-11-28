@@ -3,7 +3,7 @@ import type { Args, Ctx } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { coAuthor, commitOffside, docAt, fetchExact, replay, stampRange } from "nosedive-core";
 import type { LocalStep, RemoteUpdate, Sha, Step } from "nosedive-core";
-import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, assertHeld, assertHomeUnmoved, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, isMarkerRef, isOldRef, keyOf, localDiveRefs, ownedRef, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, diveMarkers, diveWork, fetchAll, remoteSha, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { i01a15bb27be9786f91885a2f0a0fa08e as diveOnDeck, anyMarker, assertHeld, assertHomeUnmoved, carry, diveRefs, heroRef, durableFeat, emailOf, featOf, fetchHome, heroDoc, homeUpdate, homeUpstream, isMarkerRef, isOldRef, keyOf, localDiveRefs, ownedRef, packIgnored, planHome, readOnlyRefusals, recordBase, recordOn, diveMarkers, diveWork, fetchAll, remoteSha, replanning, scopesWith, turnCommits } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
 export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): Promise<void> {
@@ -85,13 +85,27 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 				refused.push((error as Error).message);
 			}
 		}
-		if (refused.length > 0 || !homePlan) throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
+		if (refused.length > 0 || !homePlan) {
+			// What an earlier run published, as its markers on origin show, whatever has happened to the branches since.
+			const published = writable.flatMap((scope) => {
+				try {
+					const tip = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.tip`) ?? "";
+					const source = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.source`) ?? "";
+					return tip !== "" && tip !== source ? [`${scope.name} ${scope.branch} at ${tip.slice(0, 7)}`] : [];
+				} catch {
+					return [];
+				}
+			});
+			if (published.length > 0) throw new Error(`land is only partly done, and what is refused now is:\n  ${refused.join("\n  ")}\nPublished: ${published.join("; ")}. Not published: the hero's work and the land record on ${home}. Every turn is still on ${dive.branch}. Deal with what is refused, then run \`nosedive land\` again to finish it`);
+			throw new Error(`nothing was landed:\n  ${refused.join("\n  ")}`);
+		}
 		// The markers of this land are refs under the holder's token on origin, each pushed on its own before the update it guards,
 		// so a rerun from any checkout reads them (nosedive-ref-scheme): the record before it is pushed tells a record this land
 		// published from anyone else's, and the tips each repo held and published tell a retry which commits are its own.
 		const markerOf = (slug: string) => ownedRef(dive.token, `land.${id}.${slug}`);
 		const markerRef = markerOf("record");
-		const marker = remoteSha(hero.dir, markerRef) ?? undefined;
+		// Read under any token: a land that another checkout began, and this one took the dive over from, is finished from its markers.
+		const marker = anyMarker(hero.dir, id, dive.token, "record") ?? undefined;
 		const scopeMarkers = (scope: { repoId: string }) => ({ source: markerOf(`${scope.repoId}.source`), landed: markerOf(`${scope.repoId}.tip`) });
 		// The record this land wrote down is on the published home, though others may have pushed on top of it.
 		const already = marker !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", marker, homePlan.upstream).ok;
@@ -100,8 +114,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		// The scope work a failed run published, as the work branch shows it: its stamped tip, written down before the push, is the branch's.
 		const earlier = () => {
 			const published = writable.flatMap((scope) => {
-				const tip = remoteSha(scope.dir, scopeMarkers(scope).landed) ?? "";
-				const source = remoteSha(scope.dir, scopeMarkers(scope).source) ?? "";
+				const tip = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.tip`) ?? "";
+				const source = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.source`) ?? "";
 				return tip !== "" && tip !== source && found.get(scope.repoId) === tip ? [`${scope.name} ${scope.branch} at ${tip.slice(0, 7)}`] : [];
 			});
 			return published.length > 0 ? { published, unpublished: [`the hero's work and the land record on ${home}`], rerun: "land" } : undefined;
@@ -124,9 +138,11 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			const seen = diveRefs(scope.dir, id);
 			const { source: sourceRef, landed: landedRef } = scopeMarkers(scope);
 			// What this checkout held before it stamped, written down so a retry still knows the unstamped tips it may delete.
-			const source = remoteSha(scope.dir, sourceRef) ?? "";
+			const source = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.source`) ?? "";
+			const ownSource = remoteSha(scope.dir, sourceRef);
 			// The tip this land published, written down before it pushed: in recovery it is the only thing the dive's refs may be judged against.
-			const landedTip = remoteSha(scope.dir, landedRef) ?? "";
+			const landedTip = anyMarker(scope.dir, id, dive.token, `${scope.repoId}.tip`) ?? "";
+			const ownLanded = remoteSha(scope.dir, landedRef);
 			const kept = (sha: Sha) => sha === scope.ref || (landedTip !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, landedTip).ok) || (source !== "" && runGit(scope.dir, "merge-base", "--is-ancestor", sha, source).ok) || (scope.ref !== undefined && runGit(scope.dir, "merge-base", "--is-ancestor", sha, scope.ref).ok) || runGit(scope.dir, "merge-base", "--is-ancestor", sha, head).ok;
 			const lost = seen.filter(({ ref, sha }) => isOldRef(ref, id) && !kept(sha));
 			if (lost.length > 0) throw new Error(`nothing was landed: ${scope.name}: ${lost.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
@@ -142,8 +158,8 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 			pin(scope.dir, head, [tip]);
 			if (landedTip !== "") later.push(...runGit(scope.dir, "log", "--reverse", "--format=%h %s", `${landedTip}..${head}`).text.split("\n").filter(Boolean).map((line) => `  ${scope.name}: ${line}`));
 			const marks: RemoteUpdate[] = [];
-			if (source === "") marks.push({ ref: sourceRef, old: null, new: head, fastForward: false, publishes: diveWork(scope.dir, head, null) });
-			if (landedTip !== tip) marks.push({ ref: landedRef, old: landedTip || null, new: tip, fastForward: false, publishes: diveWork(scope.dir, tip, landedTip || null) });
+			if (source === "") marks.push({ ref: sourceRef, old: ownSource, new: head, fastForward: false, publishes: diveWork(scope.dir, head, ownSource) });
+			if (ownLanded !== tip) marks.push({ ref: landedRef, old: ownLanded, new: tip, fastForward: false, publishes: diveWork(scope.dir, tip, ownLanded) });
 			steps.push({ repo: scope.name, dir: scope.dir, ...(marks.length > 0 ? { remote: { name: "origin", updates: marks } } : {}), local: { moves: tip !== head ? [{ ref: branch, old: head, new: tip }] : [] } });
 			// Every marker of the dive in this repo goes once the record is on the home, the ones this land has just pushed with them.
 			const gone = new Map(diveMarkers(scope.dir, id).map(({ ref, sha }) => [ref, sha]));
@@ -160,7 +176,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 
 		// The hero's own work, replayed onto the home as it is to be published, then stamped; a conflict is met here, before any scope is pushed.
 		const heroSrcRef = markerOf("base");
-		const heroSrc = remoteSha(hero.dir, heroSrcRef) ?? "";
+		const heroSrc = anyMarker(hero.dir, id, dive.token, "base") ?? "";
 		const heroSrcAtPlan = heroSrc;
 		const d0 = runGit(hero.dir, "rev-parse", "HEAD").text;
 		const since = already && heroSrcAtPlan !== "" ? heroSrcAtPlan : `refs/heads/${home}`;
@@ -215,7 +231,7 @@ export async function i2bcf8d7ee2645df5b261ee1b2135d190(args: Args, ctx: Ctx): P
 		const lostHero = heroSeen.filter(({ ref, sha }) => isOldRef(ref, id) && !(sha === recorded || (recorded !== undefined && runGit(hero.dir, "merge-base", "--is-ancestor", sha, recorded).ok) || runGit(hero.dir, "merge-base", "--is-ancestor", sha, d0).ok || (heroSrc !== "" && runGit(hero.dir, "merge-base", "--is-ancestor", sha, heroSrc).ok)));
 		if (lostHero.length > 0) throw new Error(`nothing was landed: hero: ${lostHero.map(({ ref, sha }) => `${ref} is at ${sha.slice(0, 7)}`).join(", ")}, work this dive did not see and the landed work does not hold: jump the dive to take it in, or delete the ref by hand`);
 		// Each marker is pushed on its own before the update it guards: the record and the dive branch's tip it was built from.
-		if (!already) steps.push({ repo: "hero", dir: hero.dir, remote: { name: up.remote, updates: [{ ref: markerRef, old: marker ?? null, new: made.tip, fastForward: false, publishes: diveWork(hero.dir, made.tip, marker ?? null) }, ...(heroSrc === "" ? [{ ref: heroSrcRef, old: null, new: d0, fastForward: false, publishes: diveWork(hero.dir, d0, null) }] : [])] } });
+		if (!already) steps.push({ repo: "hero", dir: hero.dir, remote: { name: up.remote, updates: [{ ref: markerRef, old: remoteSha(hero.dir, markerRef), new: made.tip, fastForward: false, publishes: diveWork(hero.dir, made.tip, remoteSha(hero.dir, markerRef)) }, ...(heroSrc === "" ? [{ ref: heroSrcRef, old: null, new: d0, fastForward: false, publishes: diveWork(hero.dir, d0, null) }] : [])] } });
 		const heroMarkers = new Map(diveMarkers(hero.dir, id).map(({ ref, sha }) => [ref, sha] as [string, Sha]));
 		heroMarkers.set(markerRef, already ? marker! : made.tip);
 		if (heroSrc !== "" || !already) heroMarkers.set(heroSrcRef, heroSrc || d0);

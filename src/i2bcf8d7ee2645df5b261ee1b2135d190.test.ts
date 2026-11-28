@@ -214,3 +214,30 @@ test("a home whose copy of the dive doc moves after the work branch is pushed is
     assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), "main");
     assert.throws(() => f.onDeck(), "nothing is held");
 });
+test("a rerun whose scope's work branch moved after the first run published says it is partly landed, from the markers, never that nothing was landed", async () => {
+    const f = fixture("land-moved-branch");
+    await jump({ ref: f.featId }, f.ctx);
+    const t = await turner(f);
+    await t.turn("One.", "First");
+    f.commit("idea.md", "an idea\n");
+    moveHomeWhenScopePushed(f, (clone) => {
+        const path = join(clone, "kb", `${t.id}.md`);
+        writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+        git(clone, "commit", "-qam", "note on the dive");
+    });
+    await assert.rejects(land({}, t.plain), /only partly done/);
+    const published = f.remoteRef("refs/heads/work/ideas");
+    // Someone moves the work branch on from the tip the first run published.
+    const parent = join(f.hero, "..", "branch-mover");
+    git(f.hero, "clone", "-q", f.remote, parent);
+    git(parent, "checkout", "-q", "-B", "work/ideas", "origin/work/ideas");
+    git(parent, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", "theirs");
+    git(parent, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+
+    await assert.rejects(land({}, t.plain), (error: Error) => {
+        assert.match(error.message, /^land is only partly done, and what is refused now is:\n {2}work\/ideas in data has moved to \w{7}/);
+        assert.match(error.message, new RegExp(`Published: data work/ideas at ${published.slice(0, 7)}\\. Not published: the hero's work and the land record on main\\.`));
+        assert.doesNotMatch(error.message, /nothing was landed/);
+        return true;
+    });
+});

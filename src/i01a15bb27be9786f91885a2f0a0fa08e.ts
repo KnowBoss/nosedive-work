@@ -302,8 +302,15 @@ export function backUp(dive: Dive): BackedUp {
 		try {
 			const tip = must(repo.dir, "rev-parse", "HEAD");
 			// A scope holding nothing its base lacks has no work to keep; the hero always holds the turn.
-			if (repo.base && must(repo.dir, "rev-list", "--count", `${repo.base}..${tip}`) === "0") continue;
 			const there = remoteSha(repo.dir, own);
+			if (repo.base && must(repo.dir, "rev-list", "--count", `${repo.base}..${tip}`) === "0") {
+				// Work an earlier turn pushed, and the holder has since reset away, is not left advertised on origin.
+				if (there) {
+					const outcome = commitPlan({ steps: [{ repo: repo.name, dir: repo.dir, remote: { name: "origin", updates: [{ ref: own, old: there, new: null, fastForward: false }] } }] }, "turn");
+					if (!outcome.ok) done.refused.push({ name: repo.name, why: outcome.refusal.detail });
+				}
+				continue;
+			}
 			if (there !== tip) {
 				if (there) haveCommit(repo.dir, own, there);
 				const outcome = commitPlan({ steps: [{ repo: repo.name, dir: repo.dir, remote: { name: "origin", updates: [{ ref: own, old: there, new: tip, fastForward: false, publishes: diveWork(repo.dir, tip, there) }] } }] }, "turn");
@@ -371,6 +378,24 @@ export function diveRefs(dir: string, diveId: string): { ref: string; sha: strin
 /** The markers of the dive's put-down on origin, as it has them now. */
 export function diveMarkers(dir: string, diveId: string): { ref: string; sha: string }[] {
 	return remoteRefs(dir).filter(({ ref }) => isMarkerRef(ref, diveId));
+}
+
+/**
+ * What a land marker of the dive holds on origin, whichever token pushed it, the token given first: a land that one checkout
+ * began is finished by the checkout that took the dive over, from the markers the first left (nosedive-ref-scheme). `slug` is
+ * what follows `land.<dive id>.`.
+ */
+export function anyMarker(dir: string, diveId: string, token: string, slug: string): Sha | null {
+	const found = diveMarkers(dir, diveId).filter(({ ref }) => ref.endsWith(`/land.${diveId}.${slug}`));
+	return (found.find(({ ref }) => tokenOfRef(ref) === token) ?? found[0])?.sha ?? null;
+}
+
+/** Whether a land of the dive was begun and not finished, by any token: its markers are on origin in the hero or in a repo of the given remotes. */
+export function landBegun(hero: Hero, diveId: string, remotes: string[]): boolean {
+	return [undefined, ...remotes].some((url) => {
+		const listed = runGit(hero.dir, "ls-remote", url ?? "origin", "refs/nosedive/*");
+		return listed.ok && listed.text.split("\n").some((line) => new RegExp(`/land\\.${diveId}\\.`).test(line));
+	});
 }
 
 /** The commits `tip` holds that no branch or nosedive ref on origin does, as last fetched, by sha and subject. */
@@ -860,11 +885,14 @@ export function recordOn(hero: Hero, parent: Sha, rel: string, change: Change, v
 	return commitOffside(hero.dir, parent, { [rel]: text, ...options.extra }, message, version);
 }
 
-/** The turn commits in `from..to`: nosedive's own, each changing only the dive doc, as `pass --turn` makes them (turns-publish-when). */
+/**
+ * The turn commits in `from..to`, as `pass --turn` makes them (turns-publish-when): the subject `feat(<dive name>): pass turn`
+ * and a change to the dive doc only, which held-dive-doc-edits keeps to turns. Not the committer, which a rebase changes.
+ */
 export function turnCommits(hero: Hero, dive: Doc, from: Sha, to: Sha): string[] {
 	const rel = keyOf(hero, dive);
 	return ownedRange(hero.dir, from, to)
-		.filter((commit) => commit.own && !commit.merge && !isWip(dive, commit.subject) && runGit(hero.dir, "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).text === rel)
+		.filter((commit) => commit.subject === `feat(${String(dive.fm.name)}): pass turn` && !commit.merge && runGit(hero.dir, "diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).text === rel)
 		.map((commit) => commit.sha);
 }
 
