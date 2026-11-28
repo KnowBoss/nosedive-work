@@ -363,15 +363,15 @@ test("a pack of turns already on the dive ref keeps one record and does not doub
 	assert.deepEqual(localRoots(f.checkout), []);
 });
 
-test("a land of turns already on the dive ref deletes the dive's refs under every token and its markers, leaving each section once", async () => {
+test("a land of turns deletes its own refs and markers but keeps unrelated work under another token, leaving each section once", async () => {
 	const f = await setup("land-after-turns");
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	const ref = f.diveRef(f.id);
 	f.commit("idea.md", "an idea\n");
 	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
 	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
-	pushTheirs(f, f.remote, theirRef(f.id), "data");
-	pushTheirs(f, origin, theirRef(f.id), "hero");
+	const theirData = pushTheirs(f, f.remote, theirRef(f.id), "data");
+	const theirHero = pushTheirs(f, origin, theirRef(f.id), "hero");
 	assert.notEqual(git(origin, "rev-parse", ref), "");
 
 	await land({}, f.plain);
@@ -379,8 +379,10 @@ test("a land of turns already on the dive ref deletes the dive's refs under ever
 	const doc = git(origin, "show", `refs/heads/main:kb/${f.id}.md`);
 	assert.equal(heading(doc, "First"), 1);
 	assert.equal(heading(doc, "Second"), 1);
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "the dive's refs and the markers are gone");
-	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
+	assert.equal(git(origin, "rev-parse", theirRef(f.id)), theirHero, "foreign hero work the land did not hold remains backed up");
+	assert.equal(git(f.remote, "rev-parse", theirRef(f.id)), theirData, "foreign scope work the land did not hold remains backed up");
+	assert.doesNotMatch(git(origin, "for-each-ref", "--format=%(refname)", "refs/nosedive"), /\/land\./, "the markers are gone");
+	assert.doesNotMatch(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), /\/land\./);
 	assert.deepEqual(localRoots(f.hero), []);
 	assert.deepEqual(localRoots(f.checkout), []);
 });
@@ -448,8 +450,7 @@ test("jump and land take the work of the token that holds the dive over another 
 	assert.equal(f.remoteRef(theirRef(f.id)), theirs, "and the other ref is left as it was");
 
 	await land({}, f.plain);
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "");
-	assert.equal(f.remoteRef(theirRef(f.id)), "", "a land deletes the dive's refs under every token");
+	assert.equal(f.remoteRef(theirRef(f.id)), theirs, "a land keeps another token's work when what it publishes does not hold it");
 	assert.equal(git(f.remote, "rev-parse", "refs/heads/work/ideas^"), git(f.remote, "rev-parse", "refs/heads/main"), "and lands the holder's work");
 	assert.notEqual(git(f.remote, "show", "refs/heads/work/ideas:idea.md"), "");
 });
@@ -543,10 +544,10 @@ test("a turn keeps the only remote backup when origin's work branch was force-re
 	const f = await setup("scope-rewound");
 	const ref = f.diveRef(f.id);
 	const committed = f.commit("idea.md", "an idea\n");
-	git(f.checkout, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
-	assert.equal(git(f.checkout, "rev-parse", "refs/remotes/origin/work/ideas"), committed, "the tracking ref saw the old work-branch tip");
 	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
 	assert.equal(f.remoteRef(ref), committed);
+	git(f.checkout, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+	assert.equal(git(f.checkout, "rev-parse", "refs/remotes/origin/work/ideas"), committed, "the tracking ref saw the old work-branch tip");
 	git(f.remote, "update-ref", "refs/heads/work/ideas", "refs/heads/main");
 	assert.equal(git(f.checkout, "rev-parse", "refs/remotes/origin/work/ideas"), committed, "the checkout's tracking ref is stale");
 
@@ -610,8 +611,8 @@ test("jump --sure from another checkout takes over a dive whose land stopped, an
 	assert.equal(heading(doc, "First"), 1);
 	assert.equal(heading(doc, "landed"), 1);
 	assert.match(doc, /\n- turns: 1$/);
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), "", "the dive's refs and the first checkout's markers are gone");
-	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
+	assert.doesNotMatch(git(origin, "for-each-ref", "--format=%(refname)", "refs/nosedive"), /\/land\./, "the first checkout's markers are gone");
+	assert.doesNotMatch(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), /\/land\./);
 	assert.equal(git(f.remote, "rev-list", "--count", "refs/heads/main..refs/heads/work/ideas"), "1", "the work was not stamped twice");
 	assert.equal(git(other, "symbolic-ref", "--short", "HEAD"), "main");
 });
@@ -684,6 +685,7 @@ test("takeover preserves a real appended turn but replays same-subject hero work
 	writeFileSync(path, readFileSync(path, "utf8").replace("# Do the next part", "# Edited ordinary hero work"));
 	git(f.hero, "add", path);
 	git(f.hero, "commit", "-q", "-m", `feat(${name}): pass turn`);
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
 	const marker = f.diveRef(f.id).replace(`/dive.${f.id}`, `/land.${f.id}.record`);
 	git(f.hero, "push", "-q", "origin", `HEAD:${marker}`);
 
@@ -696,6 +698,7 @@ test("takeover preserves a real appended turn but replays same-subject hero work
 
 	const taken = readFileSync(join(other, "kb", `${f.id}.md`), "utf8");
 	assert.equal(heading(taken, "First"), 1, "the append-only turn remains a turn and is carried once");
+	assert.equal(heading(taken, "Second"), 1);
 	assert.match(taken, /# Edited ordinary hero work/, "the same-subject edit is ordinary hero work and is replayed");
 });
 
