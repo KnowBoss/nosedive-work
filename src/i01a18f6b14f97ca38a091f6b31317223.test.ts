@@ -539,6 +539,22 @@ test("a turn deletes the dive ref of a scope its holder reset to its base, and a
 	assert.equal(git(origin, "rev-parse", ref), git(f.hero, "rev-parse", "HEAD"));
 });
 
+test("a turn keeps the only remote backup when origin's work branch was force-rewound behind a stale tracking ref", async () => {
+	const f = await setup("scope-rewound");
+	const ref = f.diveRef(f.id);
+	const committed = f.commit("idea.md", "an idea\n");
+	git(f.checkout, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
+	assert.equal(git(f.checkout, "rev-parse", "refs/remotes/origin/work/ideas"), committed, "the tracking ref saw the old work-branch tip");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), committed);
+	git(f.remote, "update-ref", "refs/heads/work/ideas", "refs/heads/main");
+	assert.equal(git(f.checkout, "rev-parse", "refs/remotes/origin/work/ideas"), committed, "the checkout's tracking ref is stale");
+
+	f.err.length = 0;
+	assert.equal(await f.run(["Two.", "--label", "Second"]), 0, f.err.join("\n"));
+	assert.equal(f.remoteRef(ref), committed, "the dive ref remains the only origin ref that holds the scope commit");
+});
+
 test("a rebased dive branch lands its turns once, counted, with no turn replayed as hero work", async () => {
 	const f = await setup("rebased-turns");
 	const origin = git(f.hero, "remote", "get-url", "origin");
@@ -598,6 +614,89 @@ test("jump --sure from another checkout takes over a dive whose land stopped, an
 	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
 	assert.equal(git(f.remote, "rev-list", "--count", "refs/heads/main..refs/heads/work/ideas"), "1", "the work was not stamped twice");
 	assert.equal(git(other, "symbolic-ref", "--short", "HEAD"), "main");
+});
+
+test("a takeover land keeps and names a live former holder's later dive ref", async () => {
+	const f = await setup("takeover-live-holder");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	const armed = join(f.hero, "..", "armed");
+	writeFileSync(armed, "");
+	const hook = join(origin, "hooks", "pre-receive");
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = "refs/heads/main" ] && [ -e "${armed.replace(/\\/g, "/")}" ]; then\n    echo "home refused" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.plain), /home refused/);
+
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	appendFileSync(join(other, ".git", "info", "exclude"), "workspace/\n");
+	const there = { ...f.plain, cwd: other };
+	await jump({ ref: f.id, sure: true }, there);
+
+	assert.equal(await f.run(["Late.", "--label", "Late"]), 0, f.err.join("\n"));
+	const formerRef = f.diveRef(f.id);
+	const late = git(origin, "rev-parse", formerRef);
+	unlinkSync(armed);
+	f.out.length = 0;
+	await land({}, there);
+
+	assert.equal(git(origin, "rev-parse", formerRef), late, "the former holder's later turn remains backed up");
+	assert.match(f.out.join("\n"), new RegExp(formerRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "land names the ref it kept");
+});
+
+test("two failed land attempts keep each token's markers together, then a takeover cleans every marker", async () => {
+	const f = await setup("takeover-marker-attempts");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	f.commit("idea.md", "an idea\n");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	const armed = join(f.hero, "..", "armed");
+	writeFileSync(armed, "");
+	const hook = join(origin, "hooks", "pre-receive");
+	writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = "refs/heads/main" ] && [ -e "${armed.replace(/\\/g, "/")}" ]; then\n    echo "home refused" >&2\n    exit 1\n  fi\ndone\nexit 0\n`, { mode: 0o755 });
+	await assert.rejects(land({}, f.plain), /home refused/, "the first token leaves a complete attempt");
+
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	appendFileSync(join(other, ".git", "info", "exclude"), "workspace/\n");
+	const there = { ...f.plain, cwd: other };
+	await jump({ ref: f.id, sure: true }, there);
+	await assert.rejects(land({}, there), /home refused/, "the second token leaves its own record marker");
+	const attempts = new Set(git(origin, "for-each-ref", "--format=%(refname)", "refs/nosedive").split("\n").filter((ref) => ref.includes(`/land.${f.id}.`)).map((ref) => ref.split("/")[2]));
+	assert.equal(attempts.size, 2, "both attempts are present before recovery");
+
+	unlinkSync(armed);
+	await land({}, there);
+	assert.equal(git(origin, "for-each-ref", "--format=%(refname)", "refs/nosedive").split("\n").filter((ref) => ref.includes(`/land.${f.id}.`)).join(""), "", "every hero marker is cleaned");
+	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive").split("\n").filter((ref) => ref.includes(`/land.${f.id}.`)).join(""), "", "every scope marker is cleaned");
+	assert.equal(heading(git(origin, "show", `refs/heads/main:kb/${f.id}.md`), "landed"), 1);
+});
+
+test("takeover preserves a real appended turn but replays same-subject hero work that edits existing dive text", async () => {
+	const f = await setup("takeover-turn-shape");
+	const origin = git(f.hero, "remote", "get-url", "origin");
+	assert.equal(await f.run(["One.", "--label", "First"]), 0, f.err.join("\n"));
+	const path = join(f.hero, "kb", `${f.id}.md`);
+	const name = /^name: (.*)$/m.exec(readFileSync(path, "utf8"))![1]!;
+	writeFileSync(path, readFileSync(path, "utf8").replace("# Do the next part", "# Edited ordinary hero work"));
+	git(f.hero, "add", path);
+	git(f.hero, "commit", "-q", "-m", `feat(${name}): pass turn`);
+	const marker = f.diveRef(f.id).replace(`/dive.${f.id}`, `/land.${f.id}.record`);
+	git(f.hero, "push", "-q", "origin", `HEAD:${marker}`);
+
+	const other = join(f.hero, "..", "other-clone");
+	git(f.hero, "clone", "-q", origin, other);
+	git(other, "config", "user.name", "Work Test");
+	git(other, "config", "user.email", "diver@example.com");
+	appendFileSync(join(other, ".git", "info", "exclude"), "workspace/\n");
+	await jump({ ref: f.id, sure: true }, { ...f.plain, cwd: other });
+
+	const taken = readFileSync(join(other, "kb", `${f.id}.md`), "utf8");
+	assert.equal(heading(taken, "First"), 1, "the append-only turn remains a turn and is carried once");
+	assert.match(taken, /# Edited ordinary hero work/, "the same-subject edit is ordinary hero work and is replayed");
 });
 
 test("the loop's code names no ref outside refs/nosedive/", () => {
