@@ -242,13 +242,17 @@ test("moves a checkout left from other work, keeping commits origin lacks on an 
 	await jump({ ref: planned }, f.ctx);
 	const id = f.onDeck();
 	assert.equal(id, planned);
-	const kept = `refs/nosedive-orphans/${f.heroId}/${stray}`;
-	assert.equal(f.remoteRef(kept), "", "never pushed");
-	assert.equal(git(f.checkout, "rev-parse", kept), stray, "kept on a local ref");
-	assert.match(f.err.join("\n"), new RegExp(`warning: data holds 1 commit no ref on origin has, which are on this machine only, under ${kept}:\\n {2}${stray.slice(0, 7)} add stray\\.md\\nto recover it: git switch -c <name> ${kept}`));
+	const shown = `.nosedive/local/packs/orphans/data-${stray}.bundle`;
+	const kept = join(f.hero, shown);
+	assert.equal(existsSync(kept), true, "kept in a bundle beside the orphan packs");
+	git(f.checkout, "bundle", "verify", kept);
+	assert.equal(git(f.checkout, "bundle", "list-heads", kept), `${stray} refs/orphans/${stray}`);
+	assert.equal(git(f.checkout, "for-each-ref", "refs/nosedive-orphans"), "", "and no ref holds it");
+	assert.equal(f.remoteRef(`refs/orphans/${stray}`), "", "never pushed");
+	assert.match(f.err.join("\n"), new RegExp(`warning: data holds 1 commit no ref on origin has, which are on this machine only, in the bundle ${shown}:\\n {2}${stray.slice(0, 7)} add stray\\.md\\nto recover it: git fetch .*data-${stray}\\.bundle refs/orphans/${stray} && git switch -c <name> FETCH_HEAD`));
 	assert.equal(git(f.checkout, "symbolic-ref", "--short", "HEAD"), branchOf(f, id));
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), f.remoteRef("refs/heads/work/ideas"), "a feat's dives stack on its work branch");
-	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept on ${kept}, on this machine only\\n$`));
+	assert.match(f.doc(id), new RegExp(`; its 1 commit origin lacked kept in ${shown.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}, on this machine only\\n$`));
 });
 
 test("a feat under a hero's second root gets its dive in that root's directory, and packs and jumps again", async () => {
@@ -758,7 +762,8 @@ test("jump keeps the commits of a dive branch it replaces, though HEAD is elsewh
 	git(clone, "push", "-q", "origin", "HEAD:refs/heads/work/ideas");
 	f.err.length = 0;
 	await jump({}, f.ctx);
-	const kept = `refs/nosedive-orphans/${f.heroId}/${local}`;
-	assert.equal(git(f.checkout, "rev-parse", kept), local, "the replaced branch's tip is kept");
-	assert.match(f.err.join("\n"), new RegExp(`under ${kept}:`));
+	const kept = join(f.hero, ".nosedive", "local", "packs", "orphans", `data-${local}.bundle`);
+	assert.match(git(f.checkout, "bundle", "list-heads", kept), new RegExp(`^${local} `), "the replaced branch's tip is kept in a bundle");
+	assert.equal(git(f.checkout, "for-each-ref", "refs/nosedive-orphans"), "", "and in no ref");
+	assert.match(f.err.join("\n"), /in the bundle \.nosedive\/local\/packs\/orphans\/data-/);
 });

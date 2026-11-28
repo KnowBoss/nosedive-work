@@ -40,7 +40,7 @@ test("keeps the work on the dive's ref, uncommitted changes and all, packs ignor
 	writeFileSync(join(f.checkout, "node_modules", "dep.js"), "remade by an install\n");
 
 	await pack({}, f.ctx);
-	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const ref = f.diveRef(id);
 	const tip = f.remoteRef(ref);
 	assert.equal(f.remoteRef(`${ref}^`), committed, "the ref holds the commit, then the uncommitted work");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base, "the checkout sits at its base");
@@ -139,7 +139,7 @@ test("refuses when the dive's ref moved since it was jumped, pushing nothing", a
 	git(other, "-c", "user.name=O", "-c", "user.email=o@example.com", "commit", "-q", "--allow-empty", "-m", "theirs");
 	git(other, "push", "-q", "origin", `HEAD:refs/nosedive/dives/elsewhere/main/${id}`);
 	await assert.rejects(pack({}, f.ctx), new RegExp(`the dive's refs moved under it, so nothing was put down:\\n {2}data: refs/nosedive/dives/elsewhere/main/${id} is at \\w{7}, which this dive did not see`));
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), "", "nothing pushed");
+	assert.equal(f.remoteRef(f.diveRef(id)), "", "nothing pushed");
 	assert.equal(f.onDeck(), id, "still held");
 });
 
@@ -160,7 +160,7 @@ test("refuses a ref pushed since jump even once a fetch into the shared cache ha
 	assert.equal(f.onDeck(), id, "still held");
 });
 
-test("a dive packed from one checkout of the hero is jumped from another with its work, and keeps one ref", async () => {
+test("a dive packed from one checkout of the hero is jumped from another with its work; each checkout keeps its own ref and overwrites no other's", async () => {
 	const f = fixture("pack-shared");
 	// A clone, not a worktree: it shares no refs, so jump finds the dive through what it fetches.
 	const other = join(f.hero, "..", "other-clone");
@@ -175,13 +175,14 @@ test("a dive packed from one checkout of the hero is jumped from another with it
 	const committed = git(theirs, "rev-parse", "HEAD");
 	await pack({}, { ...f.ctx, cwd: other });
 	const ref = git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive");
-	assert.match(ref, new RegExp(`^refs/nosedive/${f.heroId}/dives/[0-9a-f-]{36}$`), "no branch in its name");
+	assert.match(ref, /^refs\/nosedive\/[0-9a-f]{12}\/01a15bb1-da9e-7d2d-aa82-5ee97257adc6\/dive\.[0-9a-f-]{36}$/, "under its token, no branch in its name");
 
-	await jump({ ref: ref.split("/").pop() }, f.ctx);
+	await jump({ ref: ref.split("dive.").pop() }, f.ctx);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), committed, "the other checkout's work is here");
 	const mine = f.commit("more.md", "mine\n");
 	await pack({}, f.ctx);
-	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname) %(objectname)", "refs/nosedive"), `${ref} ${mine}`, "one ref, whichever checkout packed it");
+	const refs = git(f.remote, "for-each-ref", "--format=%(refname) %(objectname)", "refs/nosedive").split("\n").sort();
+	assert.deepEqual(refs, [`${ref} ${committed}`, `${f.diveRef(ref.split("dive.").pop()!)} ${mine}`].sort(), "one ref for each token that packed it, the first checkout's left as it was");
 });
 
 test("a dive's ref under the name before hero-dive-refs is jumped, and its next pack replaces it", async () => {
@@ -190,7 +191,7 @@ test("a dive's ref under the name before hero-dive-refs is jumped, and its next 
 	const id = f.onDeck();
 	const committed = f.commit("idea.md", "an idea\n");
 	await pack({}, f.ctx);
-	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const ref = f.diveRef(id);
 	const old = `refs/nosedive/dives/${f.heroId}/main/${id}`;
 	git(f.remote, "update-ref", old, committed);
 	git(f.remote, "update-ref", "-d", ref);
@@ -219,7 +220,7 @@ test("publishes without atomic-push support at the origin", async () => {
 
 	await pack({}, f.ctx);
 
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed);
+	assert.equal(f.remoteRef(f.diveRef(id)), committed);
 	assert.throws(() => f.onDeck());
 });
 
@@ -229,7 +230,7 @@ test("a stale per-ref lease stops cleanup after publication and keeps local work
 	const id = f.onDeck();
 	const oldTip = f.commit("idea.md", "an idea\n");
 	await pack({}, f.ctx);
-	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const own = f.diveRef(id);
 	const legacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
 	git(f.remote, "update-ref", legacy, oldTip);
 	await jump({ ref: id }, f.ctx);
@@ -258,7 +259,7 @@ test("retries after partial cleanup across a scope and the hero", async () => {
 	const id = f.onDeck();
 	const first = f.commit("first.md", "first work\n");
 	await pack({}, f.ctx);
-	const dataOwn = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const dataOwn = f.diveRef(id);
 	const dataA = `refs/nosedive/dives/${f.heroId}/a/${id}`;
 	const dataZ = `refs/nosedive/dives/${f.heroId}/z/${id}`;
 	const heroLegacy = `refs/nosedive/dives/${f.heroId}/main/${id}`;
@@ -282,7 +283,7 @@ test("retries after partial cleanup across a scope and the hero", async () => {
 	assert.equal(f.remoteRef(dataA), "", "scope cleanup completed before the hero failure");
 	assert.equal(f.remoteRef(dataZ), "");
 	assert.equal(git(heroRemote, "rev-parse", heroLegacy), heroOriginal, "the failed deletion remains");
-	assert.equal(git(heroRemote, "rev-parse", `refs/nosedive/${f.heroId}/dives/${id}`), heroTarget, "hero work published before the failed deletion, while the record stayed last");
+	assert.equal(git(heroRemote, "rev-parse", f.diveRef(id)), heroTarget, "hero work published before the failed deletion, while the record stayed last");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), heroTarget, "hero work remains recoverable");
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), dataTarget, "scope work remains recoverable");
 	assert.equal(f.onDeck(), id);
@@ -353,7 +354,7 @@ test("pack resumes after its dirty snapshot was published and a later deletion f
 	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
 	const hook = rejectDelete(f.remote, legacy);
 	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
-	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const own = f.diveRef(id);
 	const wip = f.remoteRef(own);
 	assert.notEqual(wip, oldTip, "the snapshot was published");
 	unlinkSync(hook);
@@ -375,7 +376,7 @@ test("bail resumes after its dirty snapshot was published and a later deletion f
 	writeFileSync(join(f.checkout, "draft.md"), "unsaved work\n");
 	const hook = rejectDelete(f.remote, legacy);
 	await assert.rejects(bail({ reason: "superseded" }, f.ctx), /injected deletion failure/);
-	const own = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const own = f.diveRef(id);
 	const wip = f.remoteRef(own);
 	assert.notEqual(wip, oldTip, "the dirty snapshot was published before the refused deletion");
 	unlinkSync(hook);
@@ -397,14 +398,14 @@ test("pack resumes a no-work all-deletions plan after an earlier deletion succee
 	await jump({ ref: id }, f.ctx);
 	const hook = rejectDelete(f.remote, legacy);
 	await assert.rejects(pack({}, f.ctx), /injected deletion failure/);
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), "", "the own ref deletion was a safe completed prefix");
+	assert.equal(f.remoteRef(f.diveRef(id)), "", "the own ref deletion was a safe completed prefix");
 	assert.equal(f.remoteRef(legacy), committed, "the refused deletion remains");
 	unlinkSync(hook);
 	await pack({}, f.ctx);
 	assert.equal(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/nosedive"), "");
 });
 
-test("pack refuses an own ref it did not publish, even when it is an ancestor of HEAD", async () => {
+test("pack refuses a ref under a name from before the ref scheme that it did not publish, even when it is an ancestor of HEAD", async () => {
 	const f = fixture("pack-own-ancestor");
 	await jump({ ref: f.featId }, f.ctx);
 	const id = f.onDeck();
@@ -749,7 +750,7 @@ test("refuses, changing nothing, when the home's copy of the dive doc changed si
 	});
 
 	assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved, "nothing was pushed");
-	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\trefs/nosedive/${f.heroId}/dives/${t.id}`, "only what the turn pushed is on the origin");
+	assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\t${f.diveRef(t.id)}`, "only what the turn pushed is on the origin");
 	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "");
 	assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
@@ -869,7 +870,7 @@ test("a home whose copy of the dive doc moves after the earlier pushes is report
 	const origin = git(f.hero, "remote", "get-url", "origin");
 	await t.turn("One.", "First");
 	const committed = f.commit("idea.md", "an idea\n");
-	const ref = `refs/nosedive/${f.heroId}/dives/${t.id}`;
+	const ref = f.diveRef(t.id);
 	moveHomeWhenScopePushed(f, (clone) => {
 		const path = join(clone, "kb", `${t.id}.md`);
 		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
@@ -915,6 +916,31 @@ test("a home whose copy of the dive doc moves after the earlier pushes is report
 	assert.throws(() => f.onDeck(), "nothing is held");
 });
 
+test("a pack that deleted the dive's refs before the home moved under it says so, and never that nothing changed", async () => {
+	const f = fixture("pack-window-deleted");
+	await jump({ ref: f.featId }, f.ctx);
+	const id = f.onDeck();
+	f.commit("idea.md", "an idea\n");
+	await pack({}, f.ctx);
+	await jump({ ref: id }, f.ctx);
+	// Nothing left to keep in the scope, so the pack deletes the ref the first one made.
+	git(f.checkout, "reset", "-q", "--hard", "origin/main");
+	assert.notEqual(f.remoteRef(f.diveRef(id)), "");
+	moveHomeWhenScopePushed(f, (clone) => {
+		const path = join(clone, "kb", `${id}.md`);
+		writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);
+		git(clone, "commit", "-qam", "note on the dive");
+	});
+
+	await assert.rejects(pack({}, f.ctx), (error: Error) => {
+		assert.match(error.message, /and part of the work is published already, so pack is only partly done\. Published: data its dive refs, deleted\. Not published: the record on main\. Every turn is still on /);
+		assert.doesNotMatch(error.message, /so nothing was/);
+		return true;
+	});
+	assert.equal(f.remoteRef(f.diveRef(id)), "", "the deletion did happen");
+	assert.equal(f.onDeck(), id, "the dive is still on deck");
+});
+
 test("a home that moves after the earlier pushes without touching the dive doc is no refusal: the pack plans again and finishes in the same run", async () => {
 	const f = fixture("pack-window-unrelated");
 	await jump({ ref: f.featId }, f.ctx);
@@ -934,6 +960,6 @@ test("a home that moves after the earlier pushes without touching the dive doc i
 	assert.equal(sections(doc, "First"), 1);
 	assert.equal(sections(doc, "packed"), 1);
 	assert.equal(git(origin, "show", "refs/heads/main:elsewhere.md"), "elsewhere", "the other commit is under the record");
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${t.id}`), committed);
+	assert.equal(f.remoteRef(f.diveRef(t.id)), committed);
 	assert.throws(() => f.onDeck(), "nothing is held");
 });

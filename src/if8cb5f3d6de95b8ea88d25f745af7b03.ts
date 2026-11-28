@@ -13,7 +13,7 @@ import { i01a13c760de87562b4738946402010b8 as checkoutPath } from "nosedive-core
 import { i01a147171f057d019118aaa1f269f5fd as findKind } from "nosedive-core";
 import { i01a18e2a3b4b798d98068d4778a158e6 as docKind } from "nosedive-core";
 import { pinOf } from "nosedive-core";
-import { WORK_ID, Stale, carry, diveBranch, diveBranches, diveRef, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, leaseRef, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { WORK_ID, Stale, carry, diveBranch, diveBranches, emailOf, featOf, fetchAll, fetchHome, heroBranch, heroDoc, heroRef, homeOf, homeUpdate, homeUpstream, isDive as isWorkDive, isDiveRef, isWip, keepOrphans, keyOf, metaOf, openDives, parseDiveBranch, planHome, readScopes, recordOn, replanning, repoDoc, resolveUpstream, scopesWith, swapIgnored, tokenOf, tokenOfRef, trunkOf, turnCommits, type HomePlan, type ScopeEntry } from "./i01a15bb27be9786f91885a2f0a0fa08e.ts";
 import type { Doc, Hero } from "./i01a15bb27d7c72258e54d02070189892.ts";
 import { i01a15bb27f1471549b097c2e37805132 as runGit } from "./i01a15bb27f1471549b097c2e37805132.ts";
 
@@ -165,8 +165,6 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	const diveId = isDive ? String(target.fm.id) : mintUuid();
 	const branch = diveBranch(token, diveId);
 	const holder = `${me}#${token}`;
-	// A dive picked up holds each repo's dive ref at the sha just fetched, under the diver token it takes: a push of the ref by any other holder after that is refused by the lease (turn-lease-sha-kept-where). A ref not there leaves nothing leased.
-	const leasing = (dir: string): LocalMove => ({ ref: leaseRef(diveId), old: shaOf(dir, leaseRef(diveId)), new: shaOf(dir, diveRef(hero, diveId)) });
 
 	// A checkout already where the dive wants it is the diver's to change; any other must lose nothing by moving.
 	const plan = readScopes(hero, target).map((entry): Planned => {
@@ -209,12 +207,11 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		fetchAll(scope.dir);
 		const here = runGit(scope.dir, "rev-parse", "HEAD").text;
 		const moves: LocalMove[] = [];
-		const kept = new Map<string, { ref: string; commits: string[] }>();
+		const kept = new Map<string, { path: string; tip: Sha; commits: string[] }>();
 		const keep = (tip: Sha) => {
-			const orphaned = keepOrphans(hero, scope.dir, tip);
-			if (!orphaned || kept.has(orphaned.ref)) return;
-			moves.push(orphaned.move);
-			kept.set(orphaned.ref, orphaned);
+			const orphaned = keepOrphans(hero, scope.dir, scope.name, tip);
+			if (!orphaned || kept.has(orphaned.path)) return;
+			kept.set(orphaned.path, orphaned);
 		};
 		keep(here);
 		const repoTrunk = trunkOf(scope.repo, scope.dir);
@@ -228,7 +225,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			const work = shaOf(scope.dir, `refs/remotes/origin/${scope.branch}`);
 			tip = old ?? work ?? shaOf(scope.dir, `refs/remotes/origin/${repoTrunk}`)!;
 			// The dive's work may have been packed from another checkout, or rebased there.
-			const packed = newestRef(scope.dir, diveId);
+			const packed = newestRef(scope.dir, diveId, token, scope.ref);
 			if (packed && !isAncestor(scope.dir, packed, tip)) {
 				if (!isAncestor(scope.dir, tip, packed)) keep(tip);
 				tip = packed;
@@ -247,15 +244,15 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 			moves.push({ ref: local, old, new: parent ?? tip });
 			to = { branch: scope.local };
 			config = [[`branch.${scope.local}.remote`, "origin"], [`branch.${scope.local}.merge`, `refs/heads/${scope.branch}`]];
-			if (mode === "record") moves.push(leasing(scope.dir));
 		} else {
 			tip = shaOf(scope.dir, `refs/remotes/origin/${repoTrunk}`)!;
 			files = { from: here, to: tip };
 			to = { detached: tip };
 		}
 		for (const each of kept.values()) {
-			notes.push(`its ${each.commits.length} commit${each.commits.length === 1 ? "" : "s"} origin lacked kept on ${each.ref}, on this machine only`);
-			warnings.push(`warning: ${scope.name} holds ${each.commits.length} commit${each.commits.length === 1 ? "" : "s"} no ref on origin has, which are on this machine only, under ${each.ref}:\n  ${each.commits.join("\n  ")}\nto recover ${each.commits.length === 1 ? "it" : "them"}: git switch -c <name> ${each.ref}`);
+			const shown = relative(hero.dir, each.path).replace(/\\/g, "/");
+			notes.push(`its ${each.commits.length} commit${each.commits.length === 1 ? "" : "s"} origin lacked kept in ${shown}, on this machine only`);
+			warnings.push(`warning: ${scope.name} holds ${each.commits.length} commit${each.commits.length === 1 ? "" : "s"} no ref on origin has, which are on this machine only, in the bundle ${shown}:\n  ${each.commits.join("\n  ")}\nto recover ${each.commits.length === 1 ? "it" : "them"}: git fetch ${each.path} refs/orphans/${each.tip} && git switch -c <name> FETCH_HEAD`);
 		}
 		const from = headOf(scope.dir);
 		after.push({ repo: scope.name, dir: scope.dir, local: { moves, ...(sameHead(from, to) ? {} : { head: { from, to } }), ...(files.from === files.to && !files.index ? {} : { files }), ...(config ? { config } : {}) } });
@@ -264,7 +261,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 	}
 
 	const steps: Step[] = [];
-	const heroPacked = newestRef(hero.dir, diveId);
+	const heroPacked = newestRef(hero.dir, diveId, token, heroRef(hero, target));
 	const heroLocal = `refs/heads/${branch}`;
 	let record: { tip: Sha } | undefined;
 	let upstreamNote = "";
@@ -278,7 +275,7 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		let base = up.tip;
 		let update: ReturnType<typeof homeUpdate> | undefined;
 		if (mode === "record") {
-			const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId)]));
+			const refs = new Map<string, string | undefined>(plan.filter((scope) => scope.local).map((scope) => [scope.repoId, newestRef(scope.dir, diveId, token, scope.ref)]));
 			refs.set(hero.id!, heroPacked);
 			const replayed = heroPacked ? String(Number(runGit(hero.dir, "rev-list", "--count", heroPacked, "--not", `refs/heads/${home}`).text) - turnCommits(hero, target, `refs/heads/${home}`, heroPacked).length) : "0";
 			if (replayed !== "0") lines.push(`- hero: ${replayed} commit${replayed === "1" ? "" : "s"} replayed`);
@@ -318,7 +315,6 @@ async function jumpPlanned({ ctx, hero, me, target, home, token, mode, homePlan,
 		const moves: LocalMove[] = [];
 		if (record) moves.push({ ref: `refs/heads/${home}`, old: up.tip, new: record.tip });
 		moves.push({ ref: heroLocal, old: shaOf(hero.dir, heroLocal), new: parent ?? dTip });
-		if (record) moves.push(leasing(hero.dir));
 		steps.push({
 			repo: "hero",
 			dir: hero.dir,
@@ -378,12 +374,16 @@ function offFringe(hero: Hero, doc: Doc, ctx: Ctx): string | undefined {
 	return undefined;
 }
 
-/** The dive's newest ref in a repo, as last fetched. */
-function newestRef(dir: string, diveId: string): string | undefined {
-	const ref = runGit(dir, "for-each-ref", "--sort=-committerdate", "--format=%(objectname) %(refname)", "refs/nosedive")
+/**
+ * The dive's work in a repo, as last fetched: the ref of the token that holds the dive, whatever newer ones another token left;
+ * else the one the dive doc last recorded, as a packed dive has; else the newest, under whichever name it was pushed.
+ */
+function newestRef(dir: string, diveId: string, token: string, recorded: string | undefined): string | undefined {
+	const refs = runGit(dir, "for-each-ref", "--sort=-committerdate", "--format=%(objectname) %(refname)", "refs/nosedive")
 		.text.split("\n")
-		.find((line) => isDiveRef(line, diveId));
-	return ref?.split(" ")[0];
+		.filter((line) => line && isDiveRef(line, diveId))
+		.map((line) => line.split(" ") as [string, string]);
+	return refs.find(([, ref]) => tokenOfRef(ref) === token)?.[0] ?? (recorded ? refs.find(([sha]) => sha === recorded)?.[0] : undefined) ?? refs[0]?.[0];
 }
 
 

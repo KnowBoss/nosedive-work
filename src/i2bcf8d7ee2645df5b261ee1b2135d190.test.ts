@@ -43,7 +43,7 @@ test("stamps and pushes the work to its feat's branch and the hero's to its home
 	assert.equal(git(f.checkout, "log", "-1", "--format=%s"), "add idea.md");
 	assert.equal(git(f.checkout, "log", "-1", "--format=%an %ae %aI"), author, "the same author");
 	assert.equal(git(f.remote, "for-each-ref", "refs/nosedive"), "", "the dive's refs are gone, under its old name too");
-	assert.equal(git(f.hero, "ls-remote", "origin", `refs/nosedive/${f.heroId}/dives/*`), "", "the hero's too");
+	assert.equal(git(f.hero, "ls-remote", "origin", "refs/nosedive/*"), "", "the hero's too, and no marker is left");
 	const trunk = git(f.hero, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
 	assert.equal(git(f.hero, "rev-parse", "HEAD"), trunk, "the hero's work and record are on trunk");
 	assert.equal(git(f.hero, "log", "-1", "--format=%(trailers:only,unfold)", "HEAD^"), trailers, "the hero's work is stamped too");

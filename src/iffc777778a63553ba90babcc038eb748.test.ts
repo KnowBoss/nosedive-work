@@ -17,7 +17,7 @@ test("keeps what the dive held on its ref, uncommitted work included, records wh
 	writeFileSync(join(f.checkout, "draft.md"), "half\n");
 
 	await bail({ reason: "a better idea came along" }, f.ctx);
-	const ref = `refs/nosedive/${f.heroId}/dives/${id}`;
+	const ref = f.diveRef(id);
 	assert.equal(git(f.checkout, "rev-parse", "HEAD"), base);
 	assert.equal(git(f.remote, "log", "-1", "--format=%s", ref), `pack(${id.slice(-6)}.ideas): work in progress`, "nothing it held is lost");
 	assert.equal(git(f.remote, "log", "-1", "--format=%(trailers:only,unfold)", ref), "Co-Authored-By: nosedive test <noreply@nosedive.dev>", "and says nosedive made it, once");
@@ -45,7 +45,7 @@ test("bails without atomic-push support at the origin", async () => {
 
 	await bail({ reason: "no longer needed" }, f.ctx);
 
-	assert.equal(f.remoteRef(`refs/nosedive/${f.heroId}/dives/${id}`), committed);
+	assert.equal(f.remoteRef(f.diveRef(id)), committed);
 	assert.throws(() => f.onDeck());
 });
 
@@ -103,7 +103,7 @@ test("refuses, changing nothing and throwing no turn away, when the home's copy 
     });
 
     assert.equal(git(origin, "rev-parse", "refs/heads/main"), moved);
-    assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\trefs/nosedive/${f.heroId}/dives/${t.id}`, "only what the turn pushed is on the origin");
+    assert.equal(git(origin, "for-each-ref", "refs/nosedive"), `${turned} commit\t${f.diveRef(t.id)}`, "only what the turn pushed is on the origin");
     assert.equal(git(f.hero, "symbolic-ref", "--short", "HEAD"), branch, "the dive is still on deck");
     assert.equal(git(f.hero, "rev-parse", "HEAD"), head);
     assert.equal(sections(f.doc(t.id), "First"), 1, "the turn is on the dive branch");
@@ -117,7 +117,7 @@ test("a home whose copy of the dive doc moves after the earlier pushes is report
     const origin = git(f.hero, "remote", "get-url", "origin");
     await t.turn("One.", "First");
     const committed = f.commit("idea.md", "an idea\n");
-    const ref = `refs/nosedive/${f.heroId}/dives/${t.id}`;
+    const ref = f.diveRef(t.id);
     moveHomeWhenScopePushed(f, (clone) => {
         const path = join(clone, "kb", `${t.id}.md`);
         writeFileSync(path, `${readFileSync(path, "utf8")}\nA note from elsewhere.\n`);

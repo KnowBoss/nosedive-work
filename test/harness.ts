@@ -8,7 +8,7 @@ import { i01a1335480c776ba8945020d0af333eb as mintUuid } from "nosedive-core";
 import { i01a1335485c67c95b7efdf2f0e03cfd6 as findBridge } from "nosedive-core";
 import { i01a1335482f876d6808aec457f512e80 as readKbDoc } from "nosedive-core";
 import { i01a1335483aa776cb84df698b04adc06 as writeKbDoc } from "nosedive-core";
-import { parseDiveBranch } from "../src/i01a15bb27be9786f91885a2f0a0fa08e.ts";
+import { diveRef, parseDiveBranch, tokenOf } from "../src/i01a15bb27be9786f91885a2f0a0fa08e.ts";
 
 const root = mkdtempSync(join(tmpdir(), "nosedive-work-"));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -99,6 +99,10 @@ export function fixture(label: string, options: { readOnly?: boolean; roots?: bo
 		schemaRepo: seed,
 		out,
 		err,
+		/** Where a dive's work is kept on an origin when this checkout holds it: under the token of the hero's home, main. */
+		diveRef(id: string, cwd = hero): string {
+			return diveRef(tokenOf(findBridge(cwd)!, "main"), id);
+		},
 		/** The id of the dive on deck: the one the hero's dive branch names. */
 		onDeck(cwd = hero): string {
 			const parsed = parseDiveBranch(git(cwd, "symbolic-ref", "--short", "HEAD"));
